@@ -25,7 +25,11 @@ uv run python benchmark_decoding.py
 
 ## What Each Script Does
 
-### `main.py` - Inference Engine Demo
+```bash
+uv run python main.py
+```
+
+This is the main inference engine demo
 
 Demonstrates the complete LLM inference pipeline using a custom engine implementation:
 - Create a small version of Qwen3 with random initialization
@@ -36,7 +40,11 @@ Demonstrates the complete LLM inference pipeline using a custom engine implement
 
 This showcases how the custom vLLM implementation handles batched text generation with memory-efficient attention.
 
-### `benchmark_prefilling.py` - Prefilling Phase Comparison
+```bash
+uv run python benchmark_prefilling.py
+```
+
+This is the pefilling phase comparison
 
 Compares three attention implementations during the **prefilling phase** (processing input prompts):
 
@@ -44,7 +52,11 @@ Compares three attention implementations during the **prefilling phase** (proces
 2. **Naive Triton (O(N²) memory)**: GPU kernel that also uses O(N²) memory, limited by shared memory constraints (≤128 tokens)
 3. **Flash Attention (O(N) memory)**: Memory-efficient online softmax algorithm that processes attention in blocks
 
-### `benchmark_decoding.py` - Decoding Phase Comparison
+```bash
+benchmark_decoding.py
+```
+
+This is the decoding phase comparison
 
 Compares three implementations during the **decoding phase** (generating output tokens one at a time):
 
