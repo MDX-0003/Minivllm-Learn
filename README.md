@@ -70,9 +70,11 @@ Compares three implementations during the **decoding phase** (generating output 
 ```
 myvllm/
 ├── src/
-│   └── myvllm/          # Core vLLM implementation
+│   └── myvllm/           # Core vLLM implementation
 │       ├── models/       # Model implementations
-│       ├── engine/       # LLM engine logic
+│       ├── engine/       # LLM engine logic, including sequence definition for input prompts, block management for KV cache management for GPU, scheduler for iteration-based scheduling of sequences, runner for actual implementation of running prefilling and decoding, and engine for generation API interface
+│       ├── layers/       # Components for model/
+│       ├── utils/        # context
 │       └── sampling_parameters.py
 ├── main.py              # Full inference demo
 ├── benchmark_prefilling.py   # Prefilling attention comparison
