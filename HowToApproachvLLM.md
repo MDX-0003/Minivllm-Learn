@@ -2,6 +2,8 @@
 
 This document provides a step-by-step guide to understanding and replicating vLLM. Follow this order for the best learning experience.
 
+This package is developed using one A6000 GPU.
+
 ---
 
 ## Step 1: Layers
