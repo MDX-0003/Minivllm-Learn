@@ -4,6 +4,8 @@ A custom implementation of vLLM inference engine with attention mechanism benchm
 
 Benchmarking on flash attention in prefilling time and paged attention in decoding time are provided.
 
+**New to vLLM?** Check out [HowToApproachvLLM.md](HowToApproachvLLM.md) for a step-by-step implementation guide covering layers, models, paged attention, CUDA graphs, and scheduling.
+
 ## Quickstart
 
 ```bash
