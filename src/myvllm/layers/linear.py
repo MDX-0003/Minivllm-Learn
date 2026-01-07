@@ -102,7 +102,7 @@ class ColumnParallelLinear(LinearBase):
         assert shard_size == param_data.size(0), "Shard size does not match parameter size."
         # starting index
         start_index = self.tp_rank * shard_size
-        slided_weight = loaded_weights.narrow(0, start_index, start_index + shard_size)
+        slided_weight = loaded_weights.narrow(0, start_index, shard_size)
         param_data.copy_(slided_weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
