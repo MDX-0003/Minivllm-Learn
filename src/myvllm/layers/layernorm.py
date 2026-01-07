@@ -1,4 +1,5 @@
-import torch 
+import torch
+import time 
 
 class LayerNorm(torch.nn.Module):
     def __init__(self, gamma: torch.Tensor, eps: float = 1e-5):
@@ -6,7 +7,7 @@ class LayerNorm(torch.nn.Module):
         self.register_buffer('gamma', gamma)
         self.eps = eps
 
-    @torch.compile
+    # @torch.compile # Comment out this decorator when running non-compiled benchmarks.
     def rms_forward(self, x: torch.Tensor) -> torch.Tensor:
         # RMSNorm(x) = (x / sqrt(mean(x²) + ε)) ⊙ γ
 
@@ -16,7 +17,6 @@ class LayerNorm(torch.nn.Module):
 
         return x_norm
 
-    @torch.compile
     def residual_rms_forward(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
         x = x + residual
         return self.rms_forward(x), x
@@ -28,8 +28,36 @@ class LayerNorm(torch.nn.Module):
             return self.rms_forward(x)
 
 if __name__ == "__main__":
-    x = torch.randn(3, 5).cuda()
+    # Example usage
+    x = torch.randn(8,4000,8000).cuda()
+    gamma = torch.full((8000,), 0.5, device="cuda", dtype=x.dtype)
+    layer = LayerNorm(gamma=gamma).cuda()
+    residual = torch.full_like(x,fill_value=1)
 
-    a = (x.pow(2).sum(-1).div_(x.size(-1))).sqrt().unsqueeze(-1)
+    for _ in range(10): # Warm-up iterations
+        _ = layer(x)
+    
+    # Without residuals
+    times = [] 
+    for _ in range(100): # Timing iterations
+        torch.cuda.synchronize()
+        start_time = time.time()
+        _ = layer(x)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        times.append(end_time - start_time)
+    avg_time = sum(times) / len(times)
+    print(f"[Without residuals] Average inference time over 100 runs: {avg_time * 1000:.4f} ms")
 
-    print(x.div_(a))
+    # With residuals
+    times.clear()
+    for _ in range(100): # Timing iterations
+        torch.cuda.synchronize()
+        start_time = time.time()
+        _ = layer(x,residual)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        times.append(end_time - start_time)
+    avg_time = sum(times) / len(times)
+    print(f"[With residuals] Average inference time over 100 runs: {avg_time * 1000:.4f} ms")
+    

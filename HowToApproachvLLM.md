@@ -53,6 +53,39 @@ Implement RMS normalization for stable training.
 - Normalizes activations without mean centering (only uses RMS)
 - More efficient than LayerNorm for large models
 - Critical for training stability
+- Benchmark with this pattern:
+	```python
+    for _ in range(10): # Warm-up iterations
+        _ = layer(x)
+    
+    # Without residuals
+    times = [] 
+    for _ in range(100): # Timing iterations
+        torch.cuda.synchronize()
+        start_time = time.time()
+        _ = layer(x)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        times.append(end_time - start_time)
+    avg_time = sum(times) / len(times)
+    print(f"[Without residuals] Average inference time over 100 runs: {avg_time * 1000:.4f} ms")
+	```
+
+**Benchmark Results (3080ti):**
+| tensor shape    | torch.compile | residuals | time (ms) |
+| --------------- | ------------- | --------- | --------: |
+| (400, 800)      | off           | off       |  0.1799   |
+| (400, 800)      | off           | on        |  0.5713   |
+| (400, 800)      | on            | off       |  0.2552   |
+| (400, 800)      | on            | on        |  2.1194   |
+| (4000, 8000)    | off           | off       |  3.4236   |
+| (4000, 8000)    | off           | on        |  3.2261   |
+| (4000, 8000)    | on            | off       |  1.6867   |
+| (4000, 8000)    | on            | on        |  3.2725   |
+| (8, 4000, 8000) | off           | off       | 18.6594   |
+| (8, 4000, 8000) | off           | on        | 24.4978   |
+| (8, 4000, 8000) | on            | off       |  6.6783   |
+| (8, 4000, 8000) | on            | on        | 14.1385   |
 
 ---
 
