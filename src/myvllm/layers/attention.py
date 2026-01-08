@@ -513,34 +513,16 @@ class Attention(nn.Module):
 
         if context.is_prefill:
             # Prefill: use flash attention
-            if q.dim() == 3:
-                # Varlen mode: (total_tokens, num_heads, head_dim)
-                cu_seqlens = context.cu_seqlens_q
-                if cu_seqlens is None:
-                    raise ValueError("cu_seqlens_q must be provided for varlen attention")
-                
-                o = flash_attention_prefill(q, k, v, cu_seqlens, scale, 
-                                           self.num_heads, self.num_kv_heads, self.head_dim)
-                # Output: (total_tokens, num_heads, head_dim) -> (total_tokens, num_heads * head_dim)
-                return o.reshape(o.shape[0], self.num_heads * self.head_dim)
-            else:
-                # Batched mode: (B, N, num_heads, head_dim)
-                o = flash_attention_batched(q, k, v, scale,
-                                           self.num_heads, self.num_kv_heads, self.head_dim)
-                # Output: (B, N, num_heads, head_dim) -> (B, N, num_heads * head_dim)
-                B, N = o.shape[:2]
-                return o.reshape(B, N, self.num_heads * self.head_dim)
-        else:
-            # Decode: use paged attention
-            # q shape should be: (batch_size, num_heads, head_dim)
-            if q.dim() == 3:
-                # Varlen format: (total_tokens, num_heads, head_dim)
-                # In decode, this should be (batch_size, num_heads, head_dim)
-                pass
-            elif q.dim() == 4:
-                # Batched: (B, 1, num_heads, head_dim) -> (B, num_heads, head_dim)
-                q = q.squeeze(1)
+            # Varlen mode: (total_tokens, num_heads, head_dim)
+            cu_seqlens = context.cu_seqlens_q
+            if cu_seqlens is None:
+                raise ValueError("cu_seqlens_q must be provided for varlen attention")
             
+            o = flash_attention_prefill(q, k, v, cu_seqlens, scale, 
+                                        self.num_heads, self.num_kv_heads, self.head_dim)
+            # Output: (total_tokens, num_heads, head_dim) -> (total_tokens, num_heads * head_dim)
+            return o.reshape(o.shape[0], self.num_heads * self.head_dim)
+        else:
             o = paged_attention_decode(
                 q, 
                 k_cache, 
