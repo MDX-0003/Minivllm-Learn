@@ -1,4 +1,13 @@
-# MyVLLM
+<p align="center">
+  <img src="./assets/minivllm.png" alt="图片描述" width="50%" height="50%">
+</p>
+
+<p align="center">
+| <a href="./README.md"><b>English</b></a> 
+| <a href="./README_zh.md"><b>简体中文</b></a> |
+</p>
+
+# miniVLLM
 
 A custom implementation of vLLM inference engine with attention mechanism benchmarks, based on Nano-vLLM but with self-contained paged attention and flash attention implementation. 
 
@@ -85,6 +94,6 @@ myvllm/
 
 ## Requirements
 
-- Python ≥3.11, <3.12
+- Python ≥3.11, < 3.12
 - CUDA-capable GPU
 - Dependencies: `transformers`, `torch`, `xxhash` (managed by uv)
