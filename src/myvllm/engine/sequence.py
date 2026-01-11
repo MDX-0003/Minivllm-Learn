@@ -35,6 +35,7 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.max_model_length = sampling_params.max_model_length
 
     def __len__(self):
         return self.num_tokens

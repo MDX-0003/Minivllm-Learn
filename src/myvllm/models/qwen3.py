@@ -102,8 +102,11 @@ class Qwen3Attention(nn.Module):
         # only applied to q and k because these two participates in the attention_weight computation
         # to remove the possibility that there is big number in q or k that causes instability in softmax
         if self.qkv_bias is False:
-            q = self.rms_norm(q)  
+            q = self.rms_norm(q)
             k = self.rms_norm(k)
+
+        # DEBUG: Print positions to diagnose issue
+        import sys
 
         q, k = self.rotary_emb(positions, q, k) 
 

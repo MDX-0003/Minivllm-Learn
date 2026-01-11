@@ -76,7 +76,15 @@ class Scheduler:
     def postprocess(self, seqs: list[Sequence], token_ids: list[int]) -> None:
         for seq, token_id in zip(seqs, token_ids):
             seq.append_token(token_id)
-            if (not seq.ignore_eos and token_id == self.eos) or 1 + seq.num_completion_tokens >= seq.max_tokens:
+            # Check stopping conditions:
+            # EOS token
+            # Reached max_tokens limit (number of completion tokens)
+            # Reached max_model_length limit (total sequence length including prompt)
+            stop_due_to_eos = not seq.ignore_eos and token_id == self.eos
+            stop_due_to_max_tokens = 1 + seq.num_completion_tokens >= seq.max_tokens
+            stop_due_to_max_length = seq.max_model_length is not None and seq.num_tokens >= seq.max_model_length
+
+            if stop_due_to_eos or stop_due_to_max_tokens or stop_due_to_max_length:
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
                 self.running.remove(seq)
