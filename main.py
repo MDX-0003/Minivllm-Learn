@@ -32,7 +32,7 @@ config = {
     'rms_norm_epsilon': 1e-6,
     'qkv_bias': False,
     'scale': 1,
-    'max_position': 128,
+    'max_position': 128, # should be >= max_model_length, max position index allowed in rotary embedding
     'ffn_bias': True,
     'max_num_batch_tokens': 4096,
     'max_model_length': 128,
@@ -45,8 +45,11 @@ def main():
     model_name = 'Qwen/Qwen3-0.6B'
     tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=path)
     llm = LLM(config=config)
-
-    sampling_params = SamplingParams(temperature=0.6, max_tokens=256)
+    
+    # max_tokens is the max number of generated tokens
+    # max_model_length is the max total length including prompt
+    # both should be set in SamplingParams and help to determine when to stop generation
+    sampling_params = SamplingParams(temperature=0.6, max_tokens=256, max_model_length=128)
     prompts = [
         "introduce yourself" * 15,
         "list all prime numbers within 100" * 15,
