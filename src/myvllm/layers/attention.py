@@ -333,10 +333,7 @@ def paged_attention_decode_kernel(
             offs_n = token_start + tl.arange(0, BLOCK_N)
             mask_n = offs_n < context_len
             
-            # For each token, determine which block and offset within block
-            block_nums = offs_n // block_size
-            block_offsets = offs_n % block_size
-            
+          
             # Compute attention scores for this chunk
             qk = tl.zeros([BLOCK_N], dtype=tl.float32) - 1e10
             
