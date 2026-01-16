@@ -150,8 +150,8 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
 
 class QKVColumnParallelLinear(ColumnParallelLinear):
     def __init__(
-        self, 
-        input_size: int, 
+        self,
+        input_size: int,
         head_size: int,
         num_heads: int,
         num_kv_heads: int | None = None,
@@ -162,8 +162,11 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
         self.head_size = head_size
         self.num_heads = num_heads // self.tp_size
         self.num_kv_heads = num_kv_heads // self.tp_size
+        # Calculate per-GPU output size
         self.output_size = head_size * (self.num_heads + 2 * self.num_kv_heads)
-        super().__init__(input_size, self.output_size, bias=bias)
+        # Pass TOTAL output size to parent (it will divide by tp_size)
+        total_output_size = head_size * (num_heads + 2 * num_kv_heads)
+        super().__init__(input_size, total_output_size, bias=bias)
 
     # load_weight_id: q, k, v
     def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor, load_weight_id: str):
@@ -194,12 +197,14 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
 
 class RowParallelLinear(LinearBase):
     def __init__(
-        self, 
-        input_size: int, 
+        self,
+        input_size: int,
         output_size: int,
         bias: bool = True,
     ):
-        super().__init__(input_size, output_size, bias, tp_dim=1)
+        tp_size = dist.get_world_size()
+        assert input_size % tp_size == 0, "Input size must be divisible by tensor parallel size."
+        super().__init__(input_size // tp_size, output_size, bias, tp_dim=1)
 
     def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor):
         param_data = param.data 
@@ -216,9 +221,8 @@ class RowParallelLinear(LinearBase):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         result = nn.functional.linear(x, self.weight, self.bias)
         if self.tp_size > 1:
-            return dist.all_reduce(result)
-        else:
-            return result
+            dist.all_reduce(result, op=dist.ReduceOp.SUM)
+        return result
 
 
 if __name__ == "__main__":

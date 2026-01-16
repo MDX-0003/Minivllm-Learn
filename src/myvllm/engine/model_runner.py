@@ -14,7 +14,7 @@ class ModelRunner:
     def __init__(self, config: dict, rank: int, event: Event | list[Event]):
         self.config = config
         self.event = event
-        
+
         # set distributed config
         self.block_size = config['block_size']
         self.world_size = config['world_size']
@@ -57,16 +57,28 @@ class ModelRunner:
         torch.set_default_device(f'cuda:{rank}')
         torch.set_default_dtype(self.default_dtype)
 
-
-        # set shared memory
+        # IMPORTANT: Set up shared memory and barrier AFTER all model initialization
+        # This ensures both ranks complete warmup/allocation before rank 1 enters its event loop
         if self.world_size > 1:
+            # Synchronize before setting up shared memory
+            dist.barrier()
             if self.rank == 0:
+                # Try to clean up existing shared memory first
+                try:
+                    old_shm = SharedMemory(name='myvllm')
+                    old_shm.close()
+                    old_shm.unlink()
+                except FileNotFoundError:
+                    pass  # Doesn't exist, which is fine
                 self.shm = SharedMemory(name='myvllm', create=True, size=2**20)
+                # Barrier to ensure rank 1 waits until shared memory is created
                 dist.barrier()
             else:
+                # Wait for rank 0 to create shared memory
                 dist.barrier()
                 self.shm = SharedMemory(name='myvllm')
-                self.loop()
+                # Don't call self.loop() here - let the spawning code handle it
+                # Otherwise we'll be stuck in an infinite loop during __init__
 
     # only use read when rank != 0
     def read_shm(self):
@@ -78,10 +90,11 @@ class ModelRunner:
         return method_name, args
 
     # only use write when rank == 0
-    def write_shm(self, method_name: str, args: tuple):    
+    def write_shm(self, method_name: str, args: tuple):
         assert self.world_size > 1 and self.rank == 0, "write_shm can only be called when world_size > 1 and rank == 0"
         # encode the length first
-        data = pickle.dumps((method_name, args))
+        # Flatten: (method_name, args) where args is a tuple -> (method_name, *args)
+        data = pickle.dumps((method_name, *args))
         n = len(data)
         self.shm.buf[:4] = n.to_bytes(4, 'little')
         self.shm.buf[4:n+4] = data
@@ -98,7 +111,9 @@ class ModelRunner:
             del self.graphs
             del self.graph_vars
         torch.cuda.synchronize()
-        dist.destroy_process_group()
+        # Check if process group exists before destroying
+        if dist.is_initialized():
+            dist.destroy_process_group()
     
     # wait to read method and args from shared memory
     # execute the method with args
@@ -107,9 +122,10 @@ class ModelRunner:
         assert self.world_size > 1 and self.rank != 0, "loop can only be called when world_size > 1 and rank != 0"
         while True:
             method_name, args = self.read_shm()
-            self.call(method_name, args) # will call exit() as well if method_name == 'exit'
+            self.call(method_name, *args) # Unpack args when calling
             if method_name == 'exit':
                 self.exit()
+                break
 
     # will be called by both rank == 0 and rank != 0
     # given method name and args from shared memory
@@ -302,6 +318,7 @@ class ModelRunner:
             input_ids = self.prepare_decode(seqs)
         logits = self.run_model(input_ids, is_prefill)
         # only sample when rank == 0
+        token_ids = None
         if self.rank == 0:
             token_ids = self.sampler(logits, self.prepare_sample(seqs))
         reset_context()

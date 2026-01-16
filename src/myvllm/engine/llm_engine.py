@@ -10,6 +10,18 @@ from myvllm.sampling_parameters import SamplingParams
 from transformers import AutoTokenizer
 
 
+def worker_process(config, rank, event):
+    """Worker process function that initializes ModelRunner and enters loop."""
+    # FIRST print before any other code
+    import sys
+    import os
+    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)  # Line buffering
+    sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', buffering=1)
+
+    model_runner = ModelRunner(config, rank, event)
+    model_runner.loop()
+
+
 class LLMEngine:
     def __init__(self, config: dict):
         self.scheduler = Scheduler(
@@ -25,7 +37,7 @@ class LLMEngine:
         self.events = []
         for i in range(1, world_size):
             event = ctx.Event()
-            process = ctx.Process(target=ModelRunner, args=(config, i, event))
+            process = ctx.Process(target=worker_process, args=(config, i, event))
             self.events.append(event)
             self.processes.append(process)
             process.start()
@@ -50,7 +62,7 @@ class LLMEngine:
         if not scheduled_sequences:
             return [], is_prefill
         # run the model
-        outputs = self.model_runner.run(scheduled_sequences, is_prefill)
+        outputs = self.model_runner.call("run", scheduled_sequences, is_prefill)
         # postprocess the outputs
         self.scheduler.postprocess(scheduled_sequences, outputs)
 

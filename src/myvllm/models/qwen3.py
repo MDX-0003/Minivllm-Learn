@@ -28,11 +28,11 @@ class Qwen3Attention(nn.Module):
         self.num_heads = num_heads // self.tp_size
 
         self.total_num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
+        # self.num_kv_heads is per-GPU value (divided by tp_size)
         self.num_kv_heads = self.total_num_kv_heads // self.tp_size
 
         self.head_dim = head_dim if head_dim is not None else hidden_size // num_heads
         self.scale = scale
-        self.num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
 
         self.qkv_projection = QKVColumnParallelLinear(
             input_size=head_dim * self.total_num_heads,

@@ -15,11 +15,12 @@ class VocabParallelEmbedding(nn.Module):
         self.tp_size = dist.get_world_size()
         self.tp_rank = dist.get_rank()
 
-        assert num_embeddings % self.tp_size == 0, "num_embeddings must be divisible by tp_size"
         # keep the original num_embeddings
         self.num_embeddings = num_embeddings
+        # pad to make it divisible by tp_size
+        self.padded_num_embeddings = (num_embeddings + self.tp_size - 1) // self.tp_size * self.tp_size
         # this is the num_embeddings per partition in this current GPU
-        self.num_embeddings_per_partition = num_embeddings // self.tp_size
+        self.num_embeddings_per_partition = self.padded_num_embeddings // self.tp_size
         self.embedding_dim = embedding_dim
 
         self.weight = nn.Parameter(torch.empty(self.num_embeddings_per_partition, embedding_dim))
@@ -31,12 +32,25 @@ class VocabParallelEmbedding(nn.Module):
         offset = self.tp_rank * self.num_embeddings_per_partition
         shard_size = self.num_embeddings_per_partition
 
-        sharded_weights = loaded_weights.narrow(0, offset, shard_size)
-        param_data.copy_(sharded_weights)
+        # calculate how much of the original vocab falls in this partition
+        actual_start = min(offset, self.num_embeddings)
+        actual_end = min(offset + shard_size, self.num_embeddings)
+        actual_size = max(0, actual_end - actual_start)
+
+        if actual_size > 0:
+            # load the actual weights
+            sharded_weights = loaded_weights.narrow(0, actual_start, actual_size)
+            param_data[:actual_size].copy_(sharded_weights)
+
+        # pad the rest with zeros if needed
+        if actual_size < shard_size:
+            param_data[actual_size:].zero_()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # mask for tokens in this partition's range and within original vocab size
         mask = (x >= self.tp_rank * self.num_embeddings_per_partition) & \
-               (x < (self.tp_rank + 1) * self.num_embeddings_per_partition)
+               (x < (self.tp_rank + 1) * self.num_embeddings_per_partition) & \
+               (x < self.num_embeddings)
         x = mask * (x - self.tp_rank * self.num_embeddings_per_partition)
         output = F.embedding(x, self.weight)
 
@@ -66,12 +80,14 @@ class ParallelLMHead(VocabParallelEmbedding):
         logits = torch.nn.functional.linear(x, self.weight)
         if self.tp_size > 1:
             # prepare for all_gather only for GPU 0 which is the main GPU
-            all_logits = [torch.empty(logits.size()) for _ in range(self.tp_size)] if self.tp_rank == 0 else None
+            all_logits = [torch.empty(logits.size(), device=logits.device) for _ in range(self.tp_size)] if self.tp_rank == 0 else None
             # dist.gather collects the logits from all GPUs to GPU 0
             dist.gather(logits, gather_list=all_logits, dst=0)
             # concatenate
             if self.tp_rank == 0:
-                # [batch_size, seq_len, vocab_size]
+                # [batch_size, seq_len, padded_vocab_size]
                 logits = torch.cat(all_logits, dim=-1)
+                # trim to original vocab size
+                logits = logits[..., :self.num_embeddings]
 
         return logits
