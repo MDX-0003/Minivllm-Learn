@@ -34,6 +34,8 @@ uv run python benchmark_prefilling.py
 uv run python benchmark_decoding.py
 ```
 
+To run multi-GPU setting, simply change world_size to n > 1 in config in main.py
+
 ## What Each Script Does
 
 ```bash
