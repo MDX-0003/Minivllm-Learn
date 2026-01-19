@@ -295,11 +295,11 @@ y = x.reshape(2, 3).T   # 逻辑视图: [[1,4],[2,5],[3,6]]
 
 ## Step 3：序列管理
 
-具体实现：[sequence.py](src/myvllm/engine/sequence.py)
-
 现在模型已经能跑起来了，接下来实现调度（scheduling）与内存管理（memory management）系统。
 
 ### 3.1 序列类（Sequence Class）
+
+具体实现：[sequence.py](src/myvllm/engine/sequence.py)
 
 **目的：** 存储一个序列的全部信息（prompt + 生成的 tokens）。
 
@@ -328,6 +328,9 @@ self.token_ids = copy(token_ids)  # MUST copy! Creates new list
 ---
 
 ### 3.2 内存块类（Block Class）
+
+具体实现：[block_manager.py](src/myvllm/engine/block_manager.py)
+
 
 **目的：** 表示一个固定大小的内存块，用于存储 KV cache。
 
@@ -362,10 +365,11 @@ if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
 - `block_id == -1`：哈希表中未找到对应项
 - `token_ids != ...`：避免哈希碰撞！不同的 tokens 可能会产生相同的哈希值
 
-
 ---
 
 ### 3.3 内存块管理器类（BlockManager Class）
+
+具体实现：[block_manager.py](src/myvllm/engine/block_manager.py)
 
 **目的：** 管理所有序列的 KV cache 显存分配/释放。
 

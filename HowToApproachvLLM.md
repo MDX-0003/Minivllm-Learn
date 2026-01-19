@@ -16,6 +16,8 @@ Build the fundamental neural network layers first. These are the building blocks
 
 ### 1.1 Activation Function ✅
 
+Path: [activation.py](src/myvllm/layers/activation.py)
+
 Start with activation functions (e.g., SiLU, GELU).
 
 **Key Learning: torch.compile optimization**
@@ -49,6 +51,8 @@ Start with activation functions (e.g., SiLU, GELU).
 ---
 
 ### 1.2 RMS LayerNorm ✅
+
+Path: [layernorm.py](src/myvllm/layers/layernorm.py)
 
 Implement RMS normalization for stable training.
 
@@ -95,6 +99,8 @@ Implement RMS normalization for stable training.
 ---
 
 ### 1.3 Linear Layers (with Tensor Parallelism) ✅
+
+Path: [linear.py](src/myvllm/layers/linear.py)
 
 This is the most complex layer due to distributed training support.
 
@@ -147,6 +153,9 @@ for name, param in model.named_parameters():
 
 ### 1.4 Vocab Embedding & LM Head ✅
 
+Path: [embedding_head.py](src/myvllm/layers/embedding_head.py)
+
+
 **Vocab Embedding:**
 - Partition vocabulary across GPUs
 - Each GPU only stores part of the vocabulary
@@ -176,6 +185,8 @@ y = x.reshape(2, 3).T  # logically: [[1,4],[2,5],[3,6]]
 
 ### 1.5 Attention Layer
 
+Path: [attention.py](src/myvllm/layers/attention.py)
+
 Implement attention mechanism (preferably FlashAttention).
 
 **Key Tensor Concepts:**
@@ -198,6 +209,8 @@ Implement attention mechanism (preferably FlashAttention).
 ---
 
 ### 1.6 Rotary Embedding (RoPE) ✅
+
+Path: [rotary_embedding.py](src/myvllm/layers/rotary_embedding.py)
 
 Implement rotary position embeddings for position-aware attention.
 
@@ -234,6 +247,8 @@ Implement rotary position embeddings for position-aware attention.
 ---
 
 ## Step 2: Build the Model ✅
+
+Path: [qwen3.py](src/myvllm/models/qwen3.py)
 
 Combine all layers to build the complete Qwen model.
 
@@ -281,6 +296,8 @@ Now that the model works, implement the scheduling and memory management system.
 
 ### 3.1 Sequence Class
 
+Path: [sequence.py](src/myvllm/engine/sequence.py)
+
 **Purpose:** Store all information about a sequence (prompt + generated tokens).
 
 **Key Implementation Details:**
@@ -306,6 +323,9 @@ self.token_ids = copy(token_ids)  # MUST copy! Creates new list
 ---
 
 ### 3.2 Block Class
+
+Path: [block_manager.py](src/myvllm/engine/block_manager.py)
+
 
 **Purpose:** Represent a fixed-size memory block for storing KV cache.
 
@@ -343,6 +363,8 @@ if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
 
 ### 3.3 BlockManager Class
 
+Path: [block_manager.py](src/myvllm/engine/block_manager.py)
+
 **Purpose:** Manage KV cache memory allocation/deallocation across all sequences.
 
 **Key Methods:**
@@ -367,6 +389,8 @@ if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
 ---
 
 ## Step 4: Model Runner ✅
+
+Path: [model_runner.py](src/myvllm/engine/model_runner.py)
 
 **Purpose:** Bridge between sequences and model execution. Handles data preparation, CUDA graph optimization, and sampling.
 
@@ -627,6 +651,8 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 
 ## Step 5: Scheduler ✅
 
+Path: [scheduler.py](src/myvllm/engine/scheduler.py)
+
 **Purpose:** Decide which sequences to run in each iteration, manage waiting/running queues.
 
 ### 5.1 Core Design
@@ -664,6 +690,8 @@ The scheduler **always tries prefill first**, even if running queue is not empty
 ---
 
 ## Step 6: LLM Engine ✅
+
+Path: [llm_engine.py](src/myvllm/engine/llm_engine.py)
 
 **Purpose:** Top-level API orchestrating scheduler, model runner, and request handling.
 
