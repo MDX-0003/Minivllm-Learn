@@ -19,7 +19,8 @@ class Qwen3Attention(nn.Module):
         rms_norm_epsilon: float = 1e-5,
         qkv_bias: bool = False,
         base: int = 10000,
-        max_position: int = 16384
+        max_position: int = 16384,
+        block_size: int = 256,
     ):
         super().__init__()
         self.tp_size = dist.get_world_size()
@@ -49,9 +50,6 @@ class Qwen3Attention(nn.Module):
         self.q_norm = LayerNorm(torch.ones(head_dim))
         self.k_norm = LayerNorm(torch.ones(head_dim))
 
-        # Keep rms_norm for backward compatibility if qkv_bias is False
-        self.rms_norm = LayerNorm(torch.ones(head_dim))
-
         self.rotary_emb = RotaryEmbedding(
             base=base,
             rotary_embedding=head_dim,
@@ -62,7 +60,8 @@ class Qwen3Attention(nn.Module):
             self.num_heads,
             head_dim,
             scale,
-            self.num_kv_heads
+            self.num_kv_heads,
+            block_size
         )
 
         self.o_proj = RowParallelLinear(
@@ -174,6 +173,7 @@ class Qwen3DecoderLayer(nn.Module):
         max_position: int = 16384,
         intermediate_size: int = 4 * 1024,
         ffn_bias: bool = True,
+        block_size: int = 256,
     ):
         super().__init__()
         gamma = torch.ones(hidden_size)
@@ -187,7 +187,8 @@ class Qwen3DecoderLayer(nn.Module):
             rms_norm_epsilon=rms_norm_epsilon,
             qkv_bias=qkv_bias,
             base=base,
-            max_position=max_position
+            max_position=max_position,
+            block_size=block_size,
         )
         self.post_attention_layernorm = LayerNorm(gamma)
         self.mlp = Qwen3MLP(
@@ -200,8 +201,8 @@ class Qwen3DecoderLayer(nn.Module):
         if residual is not None:
             x, residual = self.input_layernorm(x, residual)
         else:
+            residual = x  # Save BEFORE normalization
             x = self.input_layernorm(x)
-            residual = x
         # Compute positions based on context (respecting sequence boundaries for batched prefill)
         from myvllm.utils import get_context
         context = get_context()
@@ -246,6 +247,7 @@ class Qwen3Model(nn.Module):
         intermediate_size: int = 4 * 1024,
         ffn_bias: bool = True,
         num_layers: int = 12,
+        block_size: int = 256,
     ):
         super().__init__()
         self.embed_tokens = VocabParallelEmbedding(
@@ -265,6 +267,7 @@ class Qwen3Model(nn.Module):
                 max_position=max_position,
                 intermediate_size=intermediate_size,
                 ffn_bias=ffn_bias,
+                block_size=block_size,
             ) for _ in range(num_layers)
         ])
         gamma = torch.ones(hidden_size)
@@ -306,6 +309,7 @@ class Qwen3ForCausalLM(nn.Module):
         ffn_bias: bool = True,
         num_layers: int = 12,
         tie_word_embeddings: bool = False,
+        block_size: int = 256,
     ):
         super().__init__()
         head_dim = head_dim if head_dim is not None else hidden_size // num_heads
@@ -323,6 +327,7 @@ class Qwen3ForCausalLM(nn.Module):
             intermediate_size=intermediate_size,
             ffn_bias=ffn_bias,
             num_layers=num_layers,
+            block_size=block_size,
         )
         self.lm_head = ParallelLMHead(
             num_embeddings=vocab_size,
@@ -350,4 +355,3 @@ if __name__ == "__main__":
     )
     input_ids = torch.randint(0, 50257, (2, 16)).cuda()
     output = model(input_ids)
-    print(output.shape)

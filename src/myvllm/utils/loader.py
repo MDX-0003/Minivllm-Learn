@@ -36,13 +36,11 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
     # If not a local path, try to download from HuggingFace
     if checkpoint_path is None or not os.path.exists(checkpoint_path):
         try:
-            print(f"Downloading model from HuggingFace: {model_name_or_path}")
             checkpoint_path = snapshot_download(
                 repo_id=model_name_or_path,
                 allow_patterns=["*.safetensors", "*.json"],
                 ignore_patterns=["*.msgpack", "*.h5", "*.bin"]  # Skip non-safetensors weights
             )
-            print(f"Model downloaded to: {checkpoint_path}")
         except Exception as e:
             raise ValueError(
                 f"Could not find or download model '{model_name_or_path}'. "
@@ -52,8 +50,6 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
 
     if not os.path.exists(checkpoint_path):
         raise ValueError(f"Checkpoint path not found: {checkpoint_path}")
-
-    print(f"Loading weights from: {checkpoint_path}")
 
     # Load all safetensors files in the checkpoint directory
     safetensor_files = [f for f in os.listdir(checkpoint_path) if f.endswith('.safetensors')]
@@ -65,12 +61,9 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
     hf_weights = {}
     for file in sorted(safetensor_files):
         file_path = os.path.join(checkpoint_path, file)
-        print(f"Reading weights from: {file}")
         with safe_open(file_path, framework='pt', device='cpu') as f:
             for weight_name in f.keys():
                 hf_weights[weight_name] = f.get_tensor(weight_name)
-
-    print(f"Loaded {len(hf_weights)} tensors from checkpoint")
 
     # Now map and load weights into custom model
     loaded_params = set()
@@ -162,7 +155,6 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
                 try:
                     param = model.get_parameter(hf_name)
                     if param.shape != hf_weight.shape:
-                        print(f"  Warning: Shape mismatch for {hf_name}: model {param.shape} vs checkpoint {hf_weight.shape}")
                         # Handle vocab size mismatch for embeddings/lm_head
                         if len(param.shape) > 0 and len(hf_weight.shape) > 0:
                             min_size = min(param.shape[0], hf_weight.shape[0])
@@ -178,10 +170,24 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
         except Exception as e:
             skipped_params.append((hf_name, f"Error: {str(e)}"))
 
+    # Check for model parameters that weren't loaded
+    unloaded_params = []
+    for name, param in model.named_parameters():
+        if name not in loaded_params:
+            unloaded_params.append(name)
+
     print(f"\n{'='*80}")
     print(f"Weight Loading Summary:")
     print(f"{'='*80}")
     print(f"Successfully loaded: {len([p for p in loaded_params if not any(x in p for x in ['.k_proj.', '.v_proj.', '.up_proj.'])])} parameter groups")
+
+    if unloaded_params:
+        print(f"\n⚠️  WARNING: {len(unloaded_params)} model parameters NOT loaded from checkpoint:")
+        for name in unloaded_params[:15]:
+            param = dict(model.named_parameters())[name]
+            print(f"  - {name} (shape: {param.shape}, mean: {param.data.mean():.6f})")
+        if len(unloaded_params) > 15:
+            print(f"  ... and {len(unloaded_params) - 15} more")
 
     if skipped_params:
         # Group skipped by reason

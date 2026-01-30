@@ -33,11 +33,11 @@ config = {
     'qkv_bias': False,
     'scale': 1,
     'max_position': 32768, # should be >= max_model_length, max position index allowed in rotary embedding
-    'ffn_bias': True,
+    'ffn_bias': False,  # Fixed: HF Qwen3 doesn't use MLP bias
     'max_num_batch_tokens': 4096,
     'max_model_length': 128,
     'gpu_memory_utilization': 0.9,
-    'eos': 151642,
+    'eos': 151645,  # Fixed: should match tokenizer.eos_token_id
 }
 
 def main():
