@@ -18,21 +18,21 @@ config = {
     'max_cached_blocks': 1024,
     'block_size': 256,
     'world_size': 1,
-    'model_name_or_path': 'gpt2',
+    'model_name_or_path': 'Qwen/Qwen3-0.6B',
     'enforce_eager': True,
-    'vocab_size': 151643,
+    'vocab_size': 151936,  # Fixed: was 151643, HF model uses 151936
     'hidden_size': 1024,
     'num_heads': 16,
-    'head_dim': 64,
+    'head_dim': 128,  # Fixed: was 64, should be 128 (hidden_size / num_heads for GQA output)
     'num_kv_heads': 8,
     'intermediate_size': 3072,
     'num_layers': 28,
     'tie_word_embeddings': True,
-    'base': 10000,
+    'base': 1000000,  # Fixed: was 10000, HF uses rope_theta=1000000
     'rms_norm_epsilon': 1e-6,
     'qkv_bias': False,
     'scale': 1,
-    'max_position': 128, # should be >= max_model_length, max position index allowed in rotary embedding
+    'max_position': 32768, # should be >= max_model_length, max position index allowed in rotary embedding
     'ffn_bias': True,
     'max_num_batch_tokens': 4096,
     'max_model_length': 128,
@@ -42,7 +42,7 @@ config = {
 
 def main():
     path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
-    model_name = 'Qwen/Qwen3-0.6B'
+    model_name = config.get('model_name_or_path', 'Qwen/Qwen3-0.6B')
     tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=path)
     llm = LLM(config=config)
     

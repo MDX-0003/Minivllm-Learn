@@ -40,7 +40,21 @@ class ModelRunner:
             ffn_bias=config['ffn_bias'],
             num_layers=config['num_layers'],
             tie_word_embeddings=config['tie_word_embeddings'],
-        ).cuda(rank)
+        )
+
+        # Load pretrained weights if model_name_or_path is provided
+        if config.get('model_name_or_path'):
+            if self.rank == 0:
+                print(f"Loading pretrained weights from {config['model_name_or_path']}...")
+            from myvllm.utils.loader import load_weights_from_checkpoint
+            load_weights_from_checkpoint(self.model, config['model_name_or_path'])
+            if self.rank == 0:
+                print(f"Weights loaded successfully on all ranks")
+        else:
+            if self.rank == 0:
+                print("No model_name_or_path provided, using random initialization")
+
+        self.model = self.model.cuda(rank)
         self.sampler = SamplerLayer()
 
         # Store default dtype before it's needed in allocate_kv_cache
