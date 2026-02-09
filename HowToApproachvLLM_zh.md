@@ -8,6 +8,8 @@
 
 **原始开发环境及测试基于A6000 GPU。**
 
+[配套视频链接](https://www.bilibili.com/video/BV1Vjz1B2EQu)
+
 ---
 
 ## Step 1: Layers
@@ -401,7 +403,24 @@ if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
 
 **目的：** 作为序列与模型执行之间的桥梁。负责数据准备、CUDA Graph 优化以及采样。
 
-### 4.1 核心函数概览
+### 4.1 权重加载
+
+可以在CPU或GPU中加载权重，不同设备中进行模型的权重加载可能会导致权重出现问题。具体可以查看 [Issues #36](https://github.com/Wenyueh/MinivLLM/issues/36)。
+
+```python
+# Load weights in GPU (model moved to GPU before loading weights)
+self.model = self.model.cuda(rank)
+
+# Load pretrained weights if model_name_or_path is provided
+if config.get('model_name_or_path'):
+    from myvllm.utils.loader import load_weights_from_checkpoint
+    load_weights_from_checkpoint(self.model, config['model_name_or_path'])
+
+# Load weights in CPU (move the model to GPU after loading weights)
+# self.model = self.model.cuda(rank)
+```
+
+### 4.2 核心函数概览
 
 ```python
 class ModelRunner:
@@ -426,7 +445,7 @@ def capture_cudagraph(self): pass # 捕获 CUDA graphs 用于优化
 
 ---
 
-### 4.2 共享内存通信
+### 4.3 共享内存通信
 
 **`read_shm()`：**（Worker 进程从 master 进程读取）
 
@@ -454,7 +473,7 @@ for event in self.events:  # Note: plural, list of events
 
 ---
 
-### 4.3 内存管理
+### 4.4 内存管理
 
 **`warmup_model()`:**
 
@@ -476,7 +495,7 @@ for event in self.events:  # Note: plural, list of events
 
 ---
 
-### 4.4 数据准备
+### 4.5 数据准备
 
 **`prepare_prefill(seqs)`：**
 
@@ -561,7 +580,7 @@ new_slot = seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1
 
 ---
 
-### 4.5 模型执行
+### 4.6 模型执行
 
 **`run_model()`:**
 
@@ -593,7 +612,7 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 
 ---
 
-### 4.6 CUDA Graph 优化
+### 4.7 CUDA Graph 优化
 
 **`capture_cudagraph()`:**
 
@@ -621,7 +640,7 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 
 ---
 
-### 4.7 辅助方法
+### 4.8 辅助方法
 
 **`loop()`:**
 - worker 进程的主循环
@@ -634,7 +653,7 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 
 ---
 
-### 4.8 关系：torch.compile vs CUDA Graph
+### 4.9 关系：torch.compile vs CUDA Graph
 
 **torch.compile：**
 - 将多个操作融合成一个 kernel
@@ -655,6 +674,7 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 - 捕获执行图
 
 **组合使用：** `torch.compile` 减少 kernel 数量，CUDA graph 消除启动开销。
+
 
 
 ---

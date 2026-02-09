@@ -5,7 +5,7 @@ class LayerNorm(torch.nn.Module):
     def __init__(self, gamma: torch.Tensor, eps: float = 1e-5):
         super().__init__()
         # Use nn.Parameter to make gamma learnable and loadable from checkpoints
-        self.weight = torch.nn.Parameter(gamma)
+        self.weight = torch.nn.Parameter(gamma.detach().clone())
         self.eps = eps
 
     @property

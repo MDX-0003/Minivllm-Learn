@@ -8,6 +8,8 @@ This document provides a step-by-step guide to understanding and replicating vLL
 
 This package is developed using one A6000 GPU.
 
+[Video link](https://www.bilibili.com/video/BV1Vjz1B2EQu)
+
 ---
 
 ## Step 1: Layers
@@ -394,7 +396,24 @@ Path: [model_runner.py](src/myvllm/engine/model_runner.py)
 
 **Purpose:** Bridge between sequences and model execution. Handles data preparation, CUDA graph optimization, and sampling.
 
-### 4.1 Core Methods Overview
+### 4.1 Load Weights
+
+Weights can be loaded on the CPU or GPU, but loading weights on different devices may cause weight issues. You can refer to [Issues #36](https://github.com/Wenyueh/MinivLLM/issues/36) for details.
+
+```python
+# Load weights in GPU (model moved to GPU before loading weights)
+self.model = self.model.cuda(rank)
+
+# Load pretrained weights if model_name_or_path is provided
+if config.get('model_name_or_path'):
+    from myvllm.utils.loader import load_weights_from_checkpoint
+    load_weights_from_checkpoint(self.model, config['model_name_or_path'])
+
+# Load weights in CPU (move the model to GPU after loading weights)
+# self.model = self.model.cuda(rank)
+```
+
+### 4.2 Core Methods Overview
 
 ```python
 class ModelRunner:
@@ -418,7 +437,7 @@ class ModelRunner:
 
 ---
 
-### 4.2 Shared Memory Communication
+### 4.3 Shared Memory Communication
 
 **`read_shm()`:** (Worker process reads from master)
 
@@ -445,7 +464,7 @@ for event in self.events:  # Note: plural, list of events
 
 ---
 
-### 4.3 Memory Management
+### 4.4 Memory Management
 
 **`warmup_model()`:**
 
@@ -467,7 +486,7 @@ for event in self.events:  # Note: plural, list of events
 
 ---
 
-### 4.4 Data Preparation
+### 4.5 Data Preparation
 
 **`prepare_prefill(seqs)`:**
 
@@ -551,7 +570,7 @@ new_slot = seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1
 
 ---
 
-### 4.5 Model Execution
+### 4.6 Model Execution
 
 **`run_model()`:**
 
@@ -584,7 +603,7 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 
 ---
 
-### 4.6 CUDA Graph Optimization
+### 4.7 CUDA Graph Optimization
 
 **`capture_cudagraph()`:**
 
@@ -612,7 +631,7 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 
 ---
 
-### 4.7 Auxiliary Methods
+### 4.8 Auxiliary Methods
 
 **`loop()`:**
 - Worker process main loop
@@ -625,7 +644,7 @@ graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
 
 ---
 
-### 4.8 Relationship: torch.compile vs CUDA Graph
+### 4.9 Relationship: torch.compile vs CUDA Graph
 
 **torch.compile:**
 - Fuses multiple operations into one kernel

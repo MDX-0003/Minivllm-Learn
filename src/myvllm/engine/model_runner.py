@@ -43,13 +43,16 @@ class ModelRunner:
             block_size=self.block_size,
         )
 
-        # IMPORTANT: Move to CUDA before loading weights to avoid incorrect behavior
+        # Load weights in GPU (model moved to GPU before loading weights)
         self.model = self.model.cuda(rank)
 
         # Load pretrained weights if model_name_or_path is provided
         if config.get('model_name_or_path'):
             from myvllm.utils.loader import load_weights_from_checkpoint
             load_weights_from_checkpoint(self.model, config['model_name_or_path'])
+
+        # Load weights in CPU (move the model to GPU after loading weights)
+        # self.model = self.model.cuda(rank)
 
         self.sampler = SamplerLayer()
 
