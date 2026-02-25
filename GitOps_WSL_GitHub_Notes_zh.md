@@ -247,3 +247,95 @@ uv run python main.py
 ```
 
 不需要 `source .venv/bin/activate`，也不需要手动 `pip install`。
+
+---
+
+## 9. 作为仓库作者：换一台电脑如何下载、修改、再推回自己的仓库？
+
+这里假设你的仓库是：
+
+- `origin`：`git@github.com:MDX-0003/Minivllm-Learn.git`（你的仓库）
+
+### 9.1 在另一台电脑“下载/克隆”你的仓库
+
+1) 安装 git（不同系统方式不同；Linux 通常用包管理器）。
+
+2) 选择克隆方式（推荐 SSH）：
+
+```bash
+git clone git@github.com:MDX-0003/Minivllm-Learn.git
+cd Minivllm-Learn
+```
+
+如果你在那台电脑上还没配置 SSH Key：
+
+```bash
+ssh-keygen -t ed25519 -C "你的邮箱"
+cat ~/.ssh/id_ed25519.pub
+```
+
+把公钥添加到 GitHub（Settings → SSH and GPG keys）。
+
+如果那台电脑也遇到 `port 22` 不通，可同样使用 443 配置（见第 3 章）：
+
+- 在 `~/.ssh/config` 加 GitHub 443 配置
+- `ssh-keyscan -p 443 ssh.github.com >> ~/.ssh/known_hosts`
+- `ssh -T git@github.com` 测试
+
+3)（可选）Python 依赖（用 uv）：
+
+```bash
+uv sync
+```
+
+### 9.2 在另一台电脑做了修改：怎么提交到本地？
+
+提交前先配好提交者信息（推荐只对该仓库生效）：
+
+```bash
+git config user.name "你的名字"
+git config user.email "你的邮箱（或 GitHub noreply）"
+```
+
+然后标准提交流程：
+
+```bash
+git status
+git diff
+
+git add -A
+git commit -m "描述这次修改做了什么"
+```
+
+### 9.3 怎么把修改推送到自己的 GitHub 仓库？
+
+推送前的一个好习惯：先把远端最新改动拉下来（避免你落后太多导致冲突）。
+
+```bash
+git pull --rebase
+```
+
+然后推送：
+
+```bash
+git push
+```
+
+#### 常见情况：push 被拒（non-fast-forward）
+
+通常是远端有人（包括你自己在另一台电脑）已经推送了新提交。
+
+处理方式一般是：
+
+```bash
+git pull --rebase
+git push
+```
+
+如果出现冲突（conflict），Git 会提示哪些文件冲突：
+
+1) 打开冲突文件，按提示解决冲突标记
+2) `git add -A`
+3) `git rebase --continue`
+4) `git push`
+
