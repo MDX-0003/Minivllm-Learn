@@ -17,14 +17,21 @@ class Scheduler:
 
     def is_finished(self):
         return len(self.waiting) == 0 and len(self.running) == 0
-    
+    #任何seq首次进入schedule时，先进waiting，schedule会尝试从waiting里
+    # 调度出满足条件的seq，prefill后进入running，running里不再触发prefill
     def add_sequence(self, sequence: Sequence):
         self.waiting.append(sequence)
 
-
+    #llmEngine.step()会调用scheduler.schedule()来调度下一批次的序列进行生成
+    #内部通过self.waiting和running来判定当前是prefill阶段还是decode阶段
     def schedule(self) -> tuple[list[Sequence], bool]:
         scheduled_sequences = []
         current_scheduled_tokens = 0
+        # current_scheduled_tokens在当前schedule调用过程中，
+        # 记录“本次已经调度了多少token”提交给LLM,提交数量不会超出max_num_batched_tokens
+        # 在prefill阶段，current_scheduled_tokens会随着每个seq的调度而增加，
+        # 在completion阶段，current_scheduled_tokens只会随着每个seq被调度而增加1
+
         # try schedule for prefilling from waiting queue if not exceeding limits
         while self.waiting and len(scheduled_sequences) < self.max_num_sequences:
             seq = self.waiting[0]
@@ -43,7 +50,7 @@ class Scheduler:
         # try schedule for completion from running queue
         while self.running:
             seq = self.running.popleft()
-            # use can_append to check whether we can append one more token
+            # use can_append to check whether still space can we append one more token
             if not self.block_manager.can_append(seq):
                 if self.running:
                     self.preempt(self.running.pop())

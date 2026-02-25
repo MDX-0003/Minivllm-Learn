@@ -263,6 +263,7 @@ class ModelRunner:
 
 
     # prepare input data for decoding
+    #对于每条seq，decode阶段只取last_token提交给run_model()
     def prepare_decode(self, seqs: list[Sequence]) -> torch.Tensor:
         input_ids = []
         context_lens = []   

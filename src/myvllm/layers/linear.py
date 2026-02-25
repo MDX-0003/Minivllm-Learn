@@ -16,13 +16,14 @@ class LinearBase(nn.Module):
     ):
         super().__init__()
         # set tp_dim, tp_rank, tp_world_size for tensor parallelism
-        self.tp_dim = tp_dim 
-        self.tp_rank = dist.get_rank()
-        self.tp_size = dist.get_world_size()
+        self.tp_dim = tp_dim #tp从哪个维度切分，0行并行1列并行
+        self.tp_rank = dist.get_rank()#当前设备在tp维度上的rank，即排第几号
+        self.tp_size = dist.get_world_size()#tp维度的总大小，即tp并行的设备数量
         
         # create weight parameter with custom weight loader
         self.weight = nn.Parameter(torch.empty(output_size, input_size))
         self.weight.weight_loader = self.weight_loader
+        #初始化一个权重加载器，初始为none,需要子类实现具体的加载方法
 
         # create bias parameter
         if bias:

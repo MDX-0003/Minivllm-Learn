@@ -20,7 +20,9 @@ class SiluAndMul(nn.Module):
 if __name__ == "__main__":
     # Example usage
     layer = SiluAndMul().cuda()
-    input_tensor = torch.randn(8, 4000, 8000).cuda()  # Example input tensor with shape (400, 800)
+    input_tensor = torch.randn( 400, 800).cuda()
+    #input_tensor = torch.randn( 4000, 8000).cuda()
+    #input_tensor = torch.randn(8, 4000, 8000).cuda()  # Example input tensor with shape (400, 800)
     
     for _ in range(10):  # Warm-up iterations
         _ = layer(input_tensor)

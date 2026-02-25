@@ -24,6 +24,8 @@ def worker_process(config, rank, event):
 
 class LLMEngine:
     def __init__(self, config: dict):
+        #三个核心：model_runner、tokenizer、scheduler
+        #processes代表多线程，events代表线程间通信的事件
         self.scheduler = Scheduler(
             max_num_sequences=config.get("max_num_sequences", 16),
             max_num_batched_tokens=config.get("max_num_batched_tokens", 1024),
@@ -54,16 +56,20 @@ class LLMEngine:
             process.join()
 
     # call scheduler to schedule the next batch
-    # return scheduled sequences and whether it is for prefilling
+    # 前处理 return scheduled sequences and whether it is for prefilling
     # call model_runner.run() to run the model
-    # call postprocessor to process the outputs and update sequences and update block manager
+    # 后处理 call postprocessor to process the outputs and update sequences and update block manager
     def step(self) -> tuple[list[int], bool]:
+        #scheduled_sequences ：本次进model的seq内容
+        #step的最终目的是让seq+1,is_prefill完全由scheduler判断其waitting队列来决定
+        #waitting只会在generate开头由add_prompt添加，所以每次generate必定重算kv cache
+        #is_prefill与否，返回的seq是不同的。prefill
         scheduled_sequences, is_prefill = self.scheduler.schedule()
         if not scheduled_sequences:
             return [], is_prefill
-        # run the model
+        # run the model,output = [seq,1] 本次step给每个seq生成的1个后续token
         outputs = self.model_runner.call("run", scheduled_sequences, is_prefill)
-        # postprocess the outputs
+        # postprocess the outputs,把token_id append到每条seq上，并更新block manager的状态
         self.scheduler.postprocess(scheduled_sequences, outputs)
 
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in scheduled_sequences if seq.is_finished]
@@ -81,9 +87,11 @@ class LLMEngine:
     # call step until all sequences are finished
     # return the generated texts
     def generate(self, prompts: list[str], sampling_params: SamplingParams) -> list[str]:
+        #把所有input放入scheduler的waiting队列，每次generate至少会prefill一次
         for prompt in prompts:
             self.add_prompt(prompt, sampling_params)
         generated_tokens = {}
+        #is_finished表示generate传入的全部prompts是否都生成完成了
         while not self.scheduler.is_finished():
             start_t = time.time()
             outputs, num_processed_tokens, is_prefill = self.step()
