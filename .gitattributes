@@ -1,0 +1,33 @@
+# Normalize text files and keep repo consistent across Windows/WSL/Linux.
+# Default: treat as text and enforce LF in the repository.
+* text=auto eol=lf
+
+# Common source / docs (explicit, mostly redundant with the rule above)
+*.py   text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+
+# Shell scripts should be LF.
+*.sh   text eol=lf
+
+# Binary assets (don't try to normalize)
+*.png  -text
+*.jpg  -text
+*.jpeg -text
+*.gif  -text
+*.pdf  -text
+*.pt   -text
+*.bin  -text
+*.so   -text
+*.dll  -text
+*.exe  -text
+*.whl  -text
+*.zip  -text
+*.tar  -text
+*.gz   -text
+*.tgz  -text
+*.bz2  -text
+*.7z   -text
