@@ -272,9 +272,25 @@ class Qwen3Model(nn.Module):
         ])
         gamma = torch.ones(hidden_size)
         self.norm = LayerNorm(gamma)
-
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        x = self.embed_tokens(input_ids)
+#原有代码只输入input_ids，用于decode text内容
+#现在拓展为如调用时显式指定inputs_embeds则
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        *,
+        inputs_embeds: torch.Tensor | None = None,
+    ) -> torch.Tensor:#return hidden states, not logits
+        if inputs_embeds is not None:
+            if input_ids is not None:
+                #不允许同时输入两份参数
+                raise ValueError("Provide either input_ids or inputs_embeds, not both")
+            #如果只输入input_embs，直接使用,对于vl，我们会在model外做embed
+            x = inputs_embeds
+        else:
+            if input_ids is None:
+                raise ValueError("Either input_ids or inputs_embeds must be provided")
+            #如果只输入input_ids，则先通过embedding层转换为embeddings
+            x = self.embed_tokens(input_ids)
         residual = None
         for layer in self.layers:
             x, residual = layer(x, residual)

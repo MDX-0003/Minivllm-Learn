@@ -1,0 +1,11 @@
+{
+  // Ensure VS Code uses the project's uv-managed virtual environment.
+  // (Recommended) Use the Python: Select Interpreter command once; this setting makes it sticky.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
+  // Improve import resolution for src-layout projects.
+  "python.analysis.extraPaths": ["${workspaceFolder}/src"],
+
+  // Optional: speed up/quieten analysis in large environments.
+  "python.analysis.exclude": ["**/__pycache__/**", "${workspaceFolder}/.venv/**"]
+}

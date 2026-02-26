@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from myvllm.models.qwen3 import Qwen3ForCausalLM
 from myvllm.engine.llm_engine import LLMEngine as LLM
+from myvllm.engine.mm_llm_engine import MMLLMEngine
 from myvllm.sampling_parameters import SamplingParams
 
 config = {
@@ -38,23 +39,35 @@ config = {
     'max_model_length': 128,
     'gpu_memory_utilization': 0.9,
     'eos': 151645,  # Fixed: should match tokenizer.eos_token_id
+
+    # ===== Milestone 1 (multimodal) =====
+    # Provide a local image path; you can copy any test image there.
+    # If image_path is None/empty, the demo will fall back to text-only engine.
+    'image_path': os.path.join(os.path.dirname(os.path.abspath(__file__)), "images", "01", "num.png"),
+    # How many "vision prefix tokens" to prepend (embeddings only, Milestone 1 uses fake embeddings)
+    'num_vision_tokens': 256,
 }
 
 def main():
     path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
     model_name = config.get('model_name_or_path', 'Qwen/Qwen3-0.6B')
     tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=path)
-    llm = LLM(config=config)
+    # If an image_path is given, use the multimodal engine; otherwise use text-only.
+    if config.get('image_path'):
+        llm = MMLLMEngine(config=config)
+    else:
+        llm = LLM(config=config)
     
     # max_tokens is the max number of generated tokens
     # max_model_length is the max total length including prompt
     # both should be set in SamplingParams and help to determine when to stop generation
     sampling_params = SamplingParams(temperature=0.6, max_tokens=256, max_model_length=128)
     prompts = [
-        "introduce yourself",# * 15,
-        "list all prime numbers within 100",# * 15,
-        "give me your opinion on the impact of artificial intelligence on society",# * 15,
-    ] #* 30
+        #"introduce yourself",# * 15,
+        #"list all prime numbers within 100",# * 15,
+        #"give me your opinion on the impact of artificial intelligence on society",# * 15,
+        "describe the image briefly, then answer: what are the key objects?",
+    ] 
     prompts = [
         tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
