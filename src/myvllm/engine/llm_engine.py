@@ -62,8 +62,8 @@ class LLMEngine:
     def step(self) -> tuple[list[int], bool]:
         #scheduled_sequences ：本次进model的seq内容
         #step的最终目的是让seq+1,is_prefill完全由scheduler判断其waitting队列来决定
-        #waitting只会在generate开头由add_prompt添加，所以每次generate必定重算kv cache
-        #is_prefill与否，返回的seq是不同的。prefill
+        #waitting只会在【每条seq首次进入generate】时，由add_prompt添加，所以每次generate必定重算kv cache
+        #is_prefill与否，返回的seq是不同的。
         scheduled_sequences, is_prefill = self.scheduler.schedule()
         if not scheduled_sequences:
             return [], is_prefill
@@ -80,7 +80,8 @@ class LLMEngine:
 
     # add prompt string to the waiting queue by first transforming it to Sequence object
     def add_prompt(self, prompt: str, sampling_params: SamplingParams) -> None:
-        self.scheduler.add_sequence(Sequence(token_ids=self.tokenizer.encode(prompt), sampling_params=sampling_params))
+        self.scheduler.add_sequence(Sequence(token_ids=self.tokenizer.encode(prompt), 
+                                             sampling_params=sampling_params))
 
     # given a list of prompts
     # add_prompt for each prompt
@@ -88,10 +89,14 @@ class LLMEngine:
     # return the generated texts
     def generate(self, prompts: list[str], sampling_params: SamplingParams) -> list[str]:
         #把所有input放入scheduler的waiting队列，每次generate至少会prefill一次
+        # sampling_params在main.py就已经指定，控制decode行为的参数,step()访问seq时也会一并访问paras
         for prompt in prompts:
             self.add_prompt(prompt, sampling_params)
         generated_tokens = {}
-        #is_finished表示generate传入的全部prompts是否都生成完成了
+        #is_finished判断running队列，表示generate传入的全部prompts是否都生成完成了
+        #之所以只需要判断scheduler的队列是否为空,是因为step->Scheduler.postprocess会：
+        # 1. 使用来自model_runner的output 让每条seq +1
+        # 2. 判断+1以后的seq是否达到上界，是则将其从running队列移除，所以外界只需要判断队列为空，就说明seq都结束了
         while not self.scheduler.is_finished():
             start_t = time.time()
             outputs, num_processed_tokens, is_prefill = self.step()
