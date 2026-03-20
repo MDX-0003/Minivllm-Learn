@@ -78,14 +78,14 @@ class BlockManager:
             block_id = self.hash_to_block_id.get(h, -1)#给当前seq的一段block分配hash id
             
             # if cache miss or hash collision
-            #如果算出hash在manager.blocks里对应的token和当前seq切片一致，则【缓存命中】
+            #如果当前seq切片 在 manager.blocks存在记录（hash），则【缓存命中】
             #命中时，no_cache_found = none
             if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
                 no_cache_found = True
 
             if not no_cache_found:
                 # update sequence information
-                #这段 block 的 KV 认为已经存在/可复用，所以 seq 可以跳过这 block 的 prefill
+                #缓存命中后，更新seq的参数，后续在model_runner里 prefill时，会跳过此变量代表的token
                 seq.num_cached_tokens += self.block_size # which == len(token_ids)
                 # update block information, considering the edge case that the block is not allocated yet but with hash code
                 if block_id not in self.used_block_ids:
@@ -103,7 +103,7 @@ class BlockManager:
                 block.update(h=h, token_ids=token_ids)
                 if h != -1:
                     self.hash_to_block_id[h] = block.block_id
-            #将block id记录到manager Class的table
+            #将block id记录到seq的table
             seq.block_table.append(block.block_id)
         
     def deallocate(self, seq: Sequence) -> None:

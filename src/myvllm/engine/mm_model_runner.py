@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import torch
 
-import torch.distributed as dist
-from multiprocessing.shared_memory import SharedMemory
-from multiprocessing.synchronize import Event
-
 from myvllm.engine.model_runner import ModelRunner
 from myvllm.engine.image_sequence import ImageSequence
 from myvllm.models.mm_qwen3 import MMQwen3ForCausalLM
@@ -23,139 +19,43 @@ class MMModelRunner(ModelRunner):
     """
 
     def __init__(self, config: dict, rank: int, event):
-        self._init_from_base_with_mm_model(config=config, rank=rank, event=event)
+        self._last_prefill_inputs_embeds: torch.Tensor | None = None
+        super().__init__(config=config, rank=rank, event=event)
 
-    def _init_from_base_with_mm_model(self, *, config: dict, rank: int, event):
-        """Initialize MMModelRunner by mirroring ModelRunner.__init__.
-
-        We deliberately DO NOT call `ModelRunner.__init__()`.
-
-        What we *copied* from `ModelRunner.__init__` (same logic, same order):
-        - distributed initialization (`dist.init_process_group`, `torch.cuda.set_device`)
-        - sampler creation
-        - warmup -> KV cache allocation -> optional CUDA graph capture
-        - default device/dtype setup
-        - shared-memory setup for multi-process RPC
-
-        What we *changed* vs `ModelRunner.__init__` and why:
-        - **Model construction**: base builds `Qwen3ForCausalLM` (text-only).
-          We build `MMQwen3ForCausalLM` so prefill can accept `inputs_embeds`.
-        - **Warmup timing**: base warmup runs immediately with the text-only model.
-          For multimodal, warmup must run after the MM-capable model exists;
-          otherwise prefill would need to pass `inputs_embeds` into a model that
-          doesn't accept it.
-        - **Sequence type during warmup**: base warmup constructs `Sequence`.
-          Our overridden `prepare_prefill` expects `ImageSequence`, so warmup must
-          construct `ImageSequence` (with no image / no vision prefix) to keep the
-          execution contract consistent.
-        """
-
-        self.config = config
-        self.event = event
-
-        # set distributed config
-        self.block_size = config['block_size']
-        self.world_size = config['world_size']
-        self.enforce_eager = config.get('enforce_eager', False)
-
-        self.rank = rank
-        dist.init_process_group('nccl', "tcp://localhost:12345", world_size=self.world_size, rank=rank)
-        torch.cuda.set_device(rank)
-
-        # set model (MM-enabled)
-        self.model = MMQwen3ForCausalLM(
-            vocab_size=config['vocab_size'],
-            hidden_size=config['hidden_size'],
-            num_heads=config['num_heads'],
-            head_dim=config['head_dim'],
-            scale=config['scale'],
-            num_kv_heads=config['num_kv_heads'],
-            rms_norm_epsilon=config['rms_norm_epsilon'],
-            qkv_bias=config['qkv_bias'],
-            base=config['base'],
-            max_position=config['max_position'],
-            intermediate_size=config['intermediate_size'],
-            ffn_bias=config['ffn_bias'],
-            num_layers=config['num_layers'],
-            tie_word_embeddings=config['tie_word_embeddings'],
+    def build_model(self):
+        return MMQwen3ForCausalLM(
+            vocab_size=self.config['vocab_size'],
+            hidden_size=self.config['hidden_size'],
+            num_heads=self.config['num_heads'],
+            head_dim=self.config['head_dim'],
+            scale=self.config['scale'],
+            num_kv_heads=self.config['num_kv_heads'],
+            rms_norm_epsilon=self.config['rms_norm_epsilon'],
+            qkv_bias=self.config['qkv_bias'],
+            base=self.config['base'],
+            max_position=self.config['max_position'],
+            intermediate_size=self.config['intermediate_size'],
+            ffn_bias=self.config['ffn_bias'],
+            num_layers=self.config['num_layers'],
+            tie_word_embeddings=self.config['tie_word_embeddings'],
             block_size=self.block_size,
         )
 
-        # Load weights in GPU (model moved to GPU before loading weights)
-        self.model = self.model.cuda(rank)
-
-        # Load pretrained weights if model_name_or_path is provided
-        if config.get('model_name_or_path'):
-            from myvllm.utils.loader import load_weights_from_checkpoint
-            load_weights_from_checkpoint(self.model, config['model_name_or_path'])
-
-        from myvllm.layers.sampler import SamplerLayer
-        self.sampler = SamplerLayer()
-
-        # Store default dtype before it's needed in allocate_kv_cache
-        self.default_dtype = torch.get_default_dtype()
-
-        # Debug flag for first decode step
-        self._first_decode = False
-
-        # Small cache for the last prefill embeds (used immediately by run_model).
-        self._last_prefill_inputs_embeds: torch.Tensor | None = None
-
-        # warm up model so that we know peak memory usage
-        self.warmup_model()
-        # allocate kv cache
-        self.allocate_kv_cache()
-        # capture cuda graph for decoding
-        if not self.enforce_eager:
-            self.capture_cudagraph()
-
-        torch.set_default_device(f'cuda:{rank}')
-        torch.set_default_dtype(self.default_dtype)
-
-        # shared memory and barrier
-        if self.world_size > 1:
-            dist.barrier()
-            if self.rank == 0:
-                try:
-                    old_shm = SharedMemory(name='myvllm')
-                    old_shm.close()
-                    old_shm.unlink()
-                except FileNotFoundError:
-                    pass
-                self.shm = SharedMemory(name='myvllm', create=True, size=2**20)
-                dist.barrier()
-            else:
-                dist.barrier()
-                self.shm = SharedMemory(name='myvllm')
-
-    def warmup_model(self):
-        """Warm up with ImageSequence to match MM prefill path.
-
-        Base ModelRunner.warmup_model creates plain `Sequence`, but MMModelRunner
-        overrides `prepare_prefill` and expects `ImageSequence`.
-        """
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        max_tokens = self.config['max_num_batch_tokens']
-        max_model_length = self.config['max_model_length']
-        batch_size = max_tokens // max_model_length
-        # Warmup should behave like text-only: no image and no vision prefix.
-        seqs = [
+    def make_warmup_sequences(self, batch_size: int, max_model_length: int) -> list[ImageSequence]:
+        return [
             ImageSequence(token_ids=[0] * max_model_length, image_path=None, num_vision_tokens=0)
             for _ in range(batch_size)
         ]
-        self.run(seqs, is_prefill=True)
-        torch.cuda.empty_cache()
 
     def prepare_prefill(self, seqs: list[ImageSequence]) -> torch.Tensor:
         # Similar to base implementation, but lengths include vision prefix.
         input_ids: list[int] = []
         slot_mappings: list[int] = []
-        seqlens_q: list[int] = []
+        seqlens_q: list[int] = []# length: num_seqs
         seqlens_k: list[int] = []
-        cu_seqlens_q = [0]
+        cu_seqlens_q = [0]# length: num_seqs + 1
         cu_seqlens_k = [0]
-        block_tables = []
+        block_tables = []#num_seqs x num_blocks
 
         # For Milestone 1: disable prefix caching for multimodal sequences.
         # So we always prefill from scratch.
@@ -167,15 +67,17 @@ class MMModelRunner(ModelRunner):
             t_vis = int(seq.num_vision_tokens)
             t_text = len(seq.token_ids)
             t_total = t_vis + t_text
+            #seq.token_ids依然只代表文本长度，但构建kv input时，长度会算上视觉token
+            #所以cu_seqlens_q、cu_seqlens_k、slot_mappings等都要以total长度为准，而不是文本长度。
 
             # We still only have text token ids.
             input_ids.extend(seq.token_ids)
 
-            # q = tokens computed in this prefill step
+            # q = tokens computed in this prefill step，包含视觉token和文本token
             seqlens_q.append(t_total)
             # k = total context length after prefill
             seqlens_k.append(t_total)
-            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlens_q[-1])
+            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlens_q[-1])#考虑了vis长度的q前缀长度
             cu_seqlens_k.append(cu_seqlens_k[-1] + seqlens_k[-1])
 
             # slot mapping must cover BOTH vision + text tokens.
@@ -221,6 +123,7 @@ class MMModelRunner(ModelRunner):
 
         # Build inputs_embeds for the full (vision+text) concatenated stream.
         # 1) get text embeds for concatenated text token ids
+        #input_id即seq.token（文本），这里将其转换到文本embed，视觉embed在下文fake_vision_embeds里补充
         text_embeds = self.model.model.embed_tokens(input_ids_t)
 
         # 2) split per-seq and prefix vision embeds
@@ -233,6 +136,8 @@ class MMModelRunner(ModelRunner):
         for seq in seqs:
             t_vis = int(seq.num_vision_tokens)
             t_text = len(seq.token_ids)
+
+            #(T_vis, hidden_size)伪造的视觉embed,目前不存在视觉token - 视觉embed这个步骤
             vis = fake_vision_embeds(
                 image_path=seq.image_path,
                 num_vision_tokens=t_vis,
@@ -243,18 +148,25 @@ class MMModelRunner(ModelRunner):
             txt = text_embeds[offset : offset + t_text]
             offset += t_text
             pieces.append(torch.cat([vis, txt], dim=0))
-
+            #这里完成了图片+文本以embed形式的拼接，每段seq的text前都接上同一份vis占位
+        
+        #这里把拼接好的embed存到成员，run时作为input进入model
         self._last_prefill_inputs_embeds = torch.cat(pieces, dim=0)
 
         # Return FULL-LENGTH placeholder ids (vision + text) for compatibility.
         # Even though prefill forward uses `inputs_embeds`, the downstream attention
         # path still infers token count from the tensor passed into `run_model`.
         # Therefore its length must match context/slot_mapping length exactly.
+        # 记录下q的前缀长度，注意这是考虑到vis长度的
         full_token_count = cu_seqlens_q[-1]
         # NOTE: do NOT use pin_memory here.
         # Some PyTorch builds/devices reject pinning for certain factory-created tensors.
         # This tensor is just a shape/length placeholder (prefill uses `inputs_embeds`),
         # so pageable CPU memory is fine.
+        # input_ids_full将在modelRunner.run里被返回并传入run_model
+        # 但实际推理的目标是_last_prefill_inputs_embeds所以只返回一个全零作为占位
+        # 注意text only里不是这样，原版不依靠_last_prefill_inputs_embeds这个成员，
+        # 只是我们为了接入vis做了这个别扭的改动
         input_ids_full = torch.zeros(full_token_count, dtype=torch.long).cuda(non_blocking=True)
         return input_ids_full
 

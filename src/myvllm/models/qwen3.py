@@ -273,7 +273,7 @@ class Qwen3Model(nn.Module):
         gamma = torch.ones(hidden_size)
         self.norm = LayerNorm(gamma)
 #原有代码只输入input_ids，用于decode text内容
-#现在拓展为如调用时显式指定inputs_embeds则
+#在mm_qwen3里会额外向当前class传入input_embeds
     def forward(
         self,
         input_ids: torch.Tensor | None = None,

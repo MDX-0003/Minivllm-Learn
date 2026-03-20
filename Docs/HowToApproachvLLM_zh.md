@@ -519,6 +519,16 @@ for event in self.events:  # Note: plural, list of events
   │ └─────── end of seq1 (position 3)
   └────────── start (position 0)
   ```
+**`num_cached_tokens` 是什么 ？**
+- num_cached_tokens 来自schedule做allocate时，prefix cache的命中率
+- 而 allocate(seq) 做命中判断时，用的是：
+- hash_to_block_id（全局映射）
+- blocks[block_id].token_ids == token_ids（全局保存的那段 token）
+- 即是说*prefix表示**跨seq的token复用**，即此前**别的seq与当前seq相同的完整block**
+
+**`prefix`和`kv cache`的区别是什么？**
+- kv cache (seq自身): 当前seq多次decode时，前面算好的kv cache保留在池里
+- prefix cache (seq之间): 另一条序列算过的token，当前序列也有，那就直接复用
 
 **为什么没有 `cu_seqlens_v`？**
 - 与 K 相同（key 和 value 的序列结构一致）
