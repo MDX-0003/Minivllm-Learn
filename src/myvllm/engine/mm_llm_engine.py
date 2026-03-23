@@ -69,7 +69,7 @@ class MMLLMEngine:
         image_path = self.config.get("image_path")
         num_vision_tokens = int(self.config.get("num_vision_tokens", 0) or 0)
         seq = ImageSequence(
-            token_ids=self.tokenizer.encode(prompt),
+            text_token_ids=self.tokenizer.encode(prompt),
             sampling_params=sampling_params,
             image_path=image_path,
             num_vision_tokens=num_vision_tokens,

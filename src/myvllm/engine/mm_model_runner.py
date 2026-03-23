@@ -43,7 +43,7 @@ class MMModelRunner(ModelRunner):
 
     def make_warmup_sequences(self, batch_size: int, max_model_length: int) -> list[ImageSequence]:
         return [
-            ImageSequence(token_ids=[0] * max_model_length, image_path=None, num_vision_tokens=0)
+            ImageSequence(text_token_ids=[0] * max_model_length, image_path=None, num_vision_tokens=0)
             for _ in range(batch_size)
         ]
 
@@ -64,9 +64,7 @@ class MMModelRunner(ModelRunner):
                 raise TypeError("MMModelRunner expects ImageSequence")
             seq.num_cached_tokens = 0
 
-            t_vis = int(seq.num_vision_tokens)
-            t_text = len(seq.token_ids)
-            t_total = t_vis + t_text
+            t_total = len(seq.token_ids)
             #seq.token_ids依然只代表文本长度，但构建kv input时，长度会算上视觉token
             #所以cu_seqlens_q、cu_seqlens_k、slot_mappings等都要以total长度为准，而不是文本长度。
 
@@ -123,35 +121,40 @@ class MMModelRunner(ModelRunner):
 
         # Build inputs_embeds for the full (vision+text) concatenated stream.
         # 1) get text embeds for concatenated text token ids
-        #input_id即seq.token（文本），这里将其转换到文本embed，视觉embed在下文fake_vision_embeds里补充
+        #input_id即seq.token（视觉前缀+文本），这里将其转换到embed，注意前缀里的vis是无法匹配文本embed的
+        #所以前面的num_vision_token个embed是错误的,下面的循环里会被替换
         text_embeds = self.model.model.embed_tokens(input_ids_t)
+        #拷贝一份
+        inputs_embeds = text_embeds.clone()
 
         # 2) split per-seq and prefix vision embeds
         device = text_embeds.device
         dtype = text_embeds.dtype
-        hidden = text_embeds.size(-1)
+        hidden = text_embeds.size(-1)#每个token的编码维度
 
-        pieces = []
+
         offset = 0
         for seq in seqs:
             t_vis = int(seq.num_vision_tokens)
-            t_text = len(seq.token_ids)
+            t_total = len(seq.token_ids)
 
-            #(T_vis, hidden_size)伪造的视觉embed,目前不存在视觉token - 视觉embed这个步骤
-            vis = fake_vision_embeds(
-                image_path=seq.image_path,
-                num_vision_tokens=t_vis,
-                hidden_size=hidden,
-                device=device,
-                dtype=dtype,
-            )
-            txt = text_embeds[offset : offset + t_text]
-            offset += t_text
-            pieces.append(torch.cat([vis, txt], dim=0))
+            if t_vis>0:
+                
+                vis = fake_vision_embeds(
+                    image_path=seq.image_path,
+                    num_vision_tokens=t_vis,
+                    hidden_size=hidden,
+                    device=device,
+                    dtype=dtype,
+                )
+                #伪造vis embed，替换掉错误的embed
+                inputs_embeds[offset:offset+t_vis] = vis
+            offset += t_total
+
             #这里完成了图片+文本以embed形式的拼接，每段seq的text前都接上同一份vis占位
         
         #这里把拼接好的embed存到成员，run时作为input进入model
-        self._last_prefill_inputs_embeds = torch.cat(pieces, dim=0)
+        self._last_prefill_inputs_embeds = inputs_embeds
 
         # Return FULL-LENGTH placeholder ids (vision + text) for compatibility.
         # Even though prefill forward uses `inputs_embeds`, the downstream attention
@@ -170,6 +173,7 @@ class MMModelRunner(ModelRunner):
         input_ids_full = torch.zeros(full_token_count, dtype=torch.long).cuda(non_blocking=True)
         return input_ids_full
 
+    #is_prefill来自scheduler.schedule，函数自身在scheduler.step -> 父类run 里被调用
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, is_prefill: bool) -> torch.Tensor:
         if is_prefill:

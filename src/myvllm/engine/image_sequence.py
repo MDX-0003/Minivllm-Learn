@@ -17,23 +17,29 @@ class ImageSequence(Sequence):
     - `ImageSequence.num_tokens` includes vision + text.
     - We treat vision tokens as part of the prompt, so `num_prompt_tokens = num_tokens`.
     """
-
+    # Initialize in MMLLMEngine.add_prompt + MMModelRunner.make_warmup_sequences
     def __init__(
         self,
-        token_ids: list[int],
+        text_token_ids: list[int],
         sampling_params: SamplingParams = SamplingParams(),
         *,
         image_path: str | None = None,
         num_vision_tokens: int = 0,
     ):
-        super().__init__(token_ids=token_ids, sampling_params=sampling_params)
+        # 构建完整的token_ids，填入父类成员
+        self.tmp_image_token_id = 0#tmp id for vision token
+        full_token_ids = [self.tmp_image_token_id]*num_vision_tokens + text_token_ids    
+        super().__init__(token_ids=full_token_ids, sampling_params=sampling_params)
+
         self.image_path = image_path
         self.num_vision_tokens = int(num_vision_tokens) if num_vision_tokens else 0
-
+        
+        
+    
         # Override length accounting to include vision prefix.
-        self.num_tokens = self.num_vision_tokens + len(self.token_ids)
+        self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = self.num_tokens
-
+        print("Image Init: {0} {1} {2}".format(len(self.token_ids), self.num_vision_tokens, self.num_tokens))
     def append_token(self, token_id):
         # Parent updates token_ids + last_token + num_tokens, which is correct because
         # vision prefix is constant.

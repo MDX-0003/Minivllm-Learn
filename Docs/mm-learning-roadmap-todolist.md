@@ -93,7 +93,7 @@
 当前做法里：
 
 - `token_ids` 主要还是文本 token
-- 图片前缀只存在于 `inputs_embeds = concat([vision, text])`
+- 图片前缀只存在于 `inputs_embeds = concat([vision, text])`,见MMModelRunner.prepare_prefill
 
 这意味着：
 

@@ -18,7 +18,7 @@ class ModelRunner:
         # set distributed config
         self.block_size = config['block_size']
         self.world_size = config['world_size']
-        self.enforce_eager = config.get('enforce_eager', False)
+        self.enforce_eager = config.get('enforce_eager', False)#用于区分decode和prefill是否调用cuda graph
 
         self.rank = rank
         dist.init_process_group('nccl', "tcp://localhost:12345", world_size=config['world_size'], rank=rank)

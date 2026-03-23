@@ -109,6 +109,7 @@ class LLMEngine:
             generated_tokens.update({seq_id: tokens for seq_id, tokens in outputs})
 
         generated_tokens = [generated_tokens[seq_id] for seq_id in sorted(generated_tokens.keys())]
-        output = {'text': [self.tokenizer.decode(tokens) for tokens in generated_tokens], 'token_ids': generated_tokens}
+        output = {'text': [self.tokenizer.decode(tokens) for tokens in generated_tokens], 
+                'token_ids': generated_tokens}
         return output
 
