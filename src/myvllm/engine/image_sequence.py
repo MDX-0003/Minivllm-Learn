@@ -27,7 +27,7 @@ class ImageSequence(Sequence):
         num_vision_tokens: int = 0,
     ):
         # 构建完整的token_ids，填入父类成员
-        self.tmp_image_token_id = 0#tmp id for vision token
+        self.tmp_image_token_id = 0 #tmp id for vision token
         full_token_ids = [self.tmp_image_token_id]*num_vision_tokens + text_token_ids    
         super().__init__(token_ids=full_token_ids, sampling_params=sampling_params)
 
@@ -39,7 +39,7 @@ class ImageSequence(Sequence):
         # Override length accounting to include vision prefix.
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = self.num_tokens
-        print("Image Init: {0} {1} {2}".format(len(self.token_ids), self.num_vision_tokens, self.num_tokens))
+        #print("Image Seq Init: {0} {1} {2}".format(len(self.token_ids), self.num_vision_tokens, self.num_tokens))
     def append_token(self, token_id):
         # Parent updates token_ids + last_token + num_tokens, which is correct because
         # vision prefix is constant.

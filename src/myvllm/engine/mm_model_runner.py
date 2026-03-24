@@ -19,7 +19,8 @@ class MMModelRunner(ModelRunner):
     """
 
     def __init__(self, config: dict, rank: int, event):
-        self._last_prefill_inputs_embeds: torch.Tensor | None = None
+        self._last_multimodal_embeddings: torch.Tensor | None = None
+        self._last_is_multimodal: torch.Tensor | None = None
         super().__init__(config=config, rank=rank, event=event)
 
     def build_model(self):
@@ -119,27 +120,23 @@ class MMModelRunner(ModelRunner):
             else None,
         )
 
-        # Build inputs_embeds for the full (vision+text) concatenated stream.
-        # 1) get text embeds for concatenated text token ids
-        #input_id即seq.token（视觉前缀+文本），这里将其转换到embed，注意前缀里的vis是无法匹配文本embed的
-        #所以前面的num_vision_token个embed是错误的,下面的循环里会被替换
-        text_embeds = self.model.model.embed_tokens(input_ids_t)
-        #拷贝一份
-        inputs_embeds = text_embeds.clone()
+        # Collect multimodal embeddings and masks.
+        device = input_ids_t.device
+        dtype = self.model.model.embed_tokens.weight.dtype
+        hidden = self.config['hidden_size']
 
-        # 2) split per-seq and prefix vision embeds
-        device = text_embeds.device
-        dtype = text_embeds.dtype
-        hidden = text_embeds.size(-1)#每个token的编码维度
+        vision_embeds_list = []
+        seq_masks = []
 
-
-        offset = 0
         for seq in seqs:
             t_vis = int(seq.num_vision_tokens)
             t_total = len(seq.token_ids)
 
-            if t_vis>0:
-                
+            # 构造当前 sequence 的 mask（前 t_vis 个位置为 True）
+            seq_mask = torch.zeros(t_total, dtype=torch.bool, device=device)
+
+            if t_vis > 0:
+                seq_mask[:t_vis] = True
                 vis = fake_vision_embeds(
                     image_path=seq.image_path,
                     num_vision_tokens=t_vis,
@@ -147,42 +144,41 @@ class MMModelRunner(ModelRunner):
                     device=device,
                     dtype=dtype,
                 )
-                #伪造vis embed，替换掉错误的embed
-                inputs_embeds[offset:offset+t_vis] = vis
-            offset += t_total
+                vision_embeds_list.append(vis)
+                
+            seq_masks.append(seq_mask)
 
-            #这里完成了图片+文本以embed形式的拼接，每段seq的text前都接上同一份vis占位
+        # 拼装全局 mask 和 所有视觉特征到一维
+        is_multimodal = torch.cat(seq_masks)
         
-        #这里把拼接好的embed存到成员，run时作为input进入model
-        self._last_prefill_inputs_embeds = inputs_embeds
+        if vision_embeds_list:
+            multimodal_embeddings = torch.cat(vision_embeds_list, dim=0)
+        else:
+            multimodal_embeddings = None
 
-        # Return FULL-LENGTH placeholder ids (vision + text) for compatibility.
-        # Even though prefill forward uses `inputs_embeds`, the downstream attention
-        # path still infers token count from the tensor passed into `run_model`.
-        # Therefore its length must match context/slot_mapping length exactly.
-        # 记录下q的前缀长度，注意这是考虑到vis长度的
-        full_token_count = cu_seqlens_q[-1]
-        # NOTE: do NOT use pin_memory here.
-        # Some PyTorch builds/devices reject pinning for certain factory-created tensors.
-        # This tensor is just a shape/length placeholder (prefill uses `inputs_embeds`),
-        # so pageable CPU memory is fine.
-        # input_ids_full将在modelRunner.run里被返回并传入run_model
-        # 但实际推理的目标是_last_prefill_inputs_embeds所以只返回一个全零作为占位
-        # 注意text only里不是这样，原版不依靠_last_prefill_inputs_embeds这个成员，
-        # 只是我们为了接入vis做了这个别扭的改动
-        input_ids_full = torch.zeros(full_token_count, dtype=torch.long).cuda(non_blocking=True)
-        return input_ids_full
+        # 把这些多模态信息存下来，给之后的 run_model 用
+        self._last_multimodal_embeddings = multimodal_embeddings
+        self._last_is_multimodal = is_multimodal
+
+        # 我们直接把包含了 vision placeholder 的 input_ids_t 返回给基类！
+        # 这样在 run_model 接收到的 input_ids 长度和实际 token 长度一致。
+        return input_ids_t
 
     #is_prefill来自scheduler.schedule，函数自身在scheduler.step -> 父类run 里被调用
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, is_prefill: bool) -> torch.Tensor:
         if is_prefill:
-            if self._last_prefill_inputs_embeds is None:
-                raise RuntimeError("Prefill inputs_embeds not prepared. Call prepare_prefill first.")
-            hidden_states = self.model(inputs_embeds=self._last_prefill_inputs_embeds)
+            # 传递 input_ids 、多模态特征、input_ids里的多模态mask，让model内部自己去做 多模态的token merge
+            hidden_states = self.model(
+                input_ids=input_ids,
+                vis_embeds=self._last_multimodal_embeddings,
+                vis_masks=self._last_is_multimodal,
+            )
             logits = self.model.compute_logits(hidden_states)
+            
             # clear to avoid accidentally reusing
-            self._last_prefill_inputs_embeds = None
+            self._last_multimodal_embeddings = None
+            self._last_is_multimodal = None
             return logits
 
         # decode: fall back to parent (CUDA graph etc.)

@@ -369,6 +369,42 @@ $$
 
 ---
 
+当前已实现：
+┌─────────────────────────────────────────────────────────────────┐
+│  ImageSequence.__init__                                        │
+│    full_token_ids = [0]*num_vision_tokens + text_token_ids     │
+│    self.num_vision_tokens = num_vision_tokens                   │
+│    self.image_path = image_path                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  MMModelRunner.prepare_prefill(seqs)                            │
+│    for each seq:                                                │
+│      t_vis = seq.num_vision_tokens                              │
+│      t_total = len(seq.token_ids)                               │
+│      seq_mask = [True]*t_vis + [False]*(t_total - t_vis)       │
+│      vis = fake_vision_embeds(..., num_vision_tokens=t_vis)    │
+│    is_multimodal = cat([seq_masks])        # (T_total,)        │
+│    multimodal_embeddings = cat(vis_list)  # (T_vis, hidden)    │
+│    self._last_multimodal_embeddings = ...                     │
+│    self._last_is_multimodal = is_multimodal                    │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  MMModelRunner.run_model(input_ids, is_prefill)                 │
+│    input_ids 来自 seq.token_ids，长度 = t_vis + t_text         │
+│    hidden = model(input_ids, vis_embeds, vis_masks)            │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  MMQwen3ForCausalLM.forward(input_ids, vis_embeds, vis_masks)   │
+│    inputs_embeds = embed_tokens(input_ids)  # (T_total, hidden)│
+│    inputs_embeds[vis_masks] = vis_embeds      # 原地替换        │
+│    return model(input_ids=None, inputs_embeds)                 │
+└─────────────────────────────────────────────────────────────────┘
+
+
+
 ## TODO 4：新增最小 `processor` 层
 
 ### 目标
