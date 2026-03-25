@@ -249,7 +249,7 @@ class ModelRunner:
         block_tables = []
         for seq in seqs:
             token_ids = seq.token_ids
-            # num_cached_tokens 来自schedule做allocate时，prefix cache的命中率
+            # num_cached_tokens 来自schedule做allocate时，prefix cache的命中率，表示seq前几个token命中
             # block_manager分配时会更新seq.num_cached_tokens
             num_cached_tokens = seq.num_cached_tokens
             input_ids.extend(token_ids[num_cached_tokens:])#每次prefill，只为cache【以外】的token执行

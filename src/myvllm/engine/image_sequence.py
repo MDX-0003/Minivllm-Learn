@@ -1,23 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from myvllm.engine.sequence import Sequence
 from myvllm.sampling_parameters import SamplingParams
 
-
+# llm_engine.add_prompt + model_runner.make_warmup_sequences
 class ImageSequence(Sequence):
-    """Sequence with an image prefix (Milestone 1).
-
-    We model the image as `num_vision_tokens` prefix tokens that only exist as embeddings.
-    They count toward KV-cache length and positions, but do not exist in `token_ids`.
-
-    IMPORTANT: we keep the parent `Sequence` implementation untouched.
-
-    Notes about accounting:
-    - `Sequence.token_ids` keeps *text* tokens only.
-    - `ImageSequence.num_tokens` includes vision + text.
-    - We treat vision tokens as part of the prompt, so `num_prompt_tokens = num_tokens`.
-    """
-    # Initialize in MMLLMEngine.add_prompt + MMModelRunner.make_warmup_sequences
     def __init__(
         self,
         text_token_ids: list[int],
@@ -25,45 +12,31 @@ class ImageSequence(Sequence):
         *,
         image_path: str | None = None,
         num_vision_tokens: int = 0,
+        placeholder_token_ids: list[int] | None = None,
     ):
-        # 构建完整的token_ids，填入父类成员
-        self.tmp_image_token_id = 0 #tmp id for vision token
-        full_token_ids = [self.tmp_image_token_id]*num_vision_tokens + text_token_ids    
+        if placeholder_token_ids is None:
+            placeholder_token_ids = []
+        full_token_ids = placeholder_token_ids + text_token_ids
         super().__init__(token_ids=full_token_ids, sampling_params=sampling_params)
 
         self.image_path = image_path
         self.num_vision_tokens = int(num_vision_tokens) if num_vision_tokens else 0
-        
-        
-    
-        # Override length accounting to include vision prefix.
+
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = self.num_tokens
-        #print("Image Seq Init: {0} {1} {2}".format(len(self.token_ids), self.num_vision_tokens, self.num_tokens))
+        
     def append_token(self, token_id):
-        # Parent updates token_ids + last_token + num_tokens, which is correct because
-        # vision prefix is constant.
         super().append_token(token_id)
 
     @property
     def last_block_num_tokens(self):
-        """Number of tokens in the last KV-cache block.
-
-        The base `Sequence.last_block_num_tokens` derives this value by slicing
-        `token_ids`, which only contains *text* tokens.
-
-        For `ImageSequence`, the effective stream length is (vision + text), so the
-        last block token count must be computed from `num_tokens` directly.
-        """
         return self.num_tokens - (self.num_blocks - 1) * self.block_size
 
     def __getstate__(self):
-        # Extend base serialization so multiprocessing/shm path can carry image info.
         base = super().__getstate__()
         return (self.image_path, self.num_vision_tokens, *base)
 
     def __setstate__(self, state):
-        # state = (image_path, num_vision_tokens, <base_state...>)
         self.image_path = state[0]
         self.num_vision_tokens = state[1]
         super().__setstate__(state[2:])

@@ -10,7 +10,7 @@ from myvllm.engine.image_sequence import ImageSequence
 from myvllm.engine.scheduler import Scheduler
 from myvllm.engine.mm_model_runner import MMModelRunner
 from myvllm.sampling_parameters import SamplingParams
-
+from myvllm.multimodal.processor import Processor
 
 def worker_process(config, rank, event):
     model_runner = MMModelRunner(config, rank, event)
@@ -48,6 +48,7 @@ class MMLLMEngine:
         self.model_runner = MMModelRunner(config, rank=0, event=self.events)
         self.tokenizer = AutoTokenizer.from_pretrained(config.get("model_name_or_path", "gpt2"))
         atexit.register(self.exit)
+        self.vis_processor = Processor(config)
 
     def exit(self):
         self.model_runner.call("exit")
@@ -67,12 +68,15 @@ class MMLLMEngine:
 
     def add_prompt(self, prompt: str, sampling_params: SamplingParams) -> None:
         image_path = self.config.get("image_path")
+        vis_processor_output = self.vis_processor.process(image_path)
+
         num_vision_tokens = int(self.config.get("num_vision_tokens", 0) or 0)
         seq = ImageSequence(
             text_token_ids=self.tokenizer.encode(prompt),
             sampling_params=sampling_params,
-            image_path=image_path,
+            image_path=vis_processor_output.image_meta["image_path"],
             num_vision_tokens=num_vision_tokens,
+            placeholder_token_ids=vis_processor_output.placeholder_token_ids, 
         )
         self.scheduler.add_sequence(seq)
 
