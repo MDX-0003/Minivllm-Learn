@@ -181,7 +181,7 @@
 注意这里有一个实现选择：
 
 1. `num_vision_tokens` 只表示纯视觉 patch token 数，不含 start/end
-2. prompt 真实额外长度则是 `num_vision_tokens + 2`
+2. prompt 真实额外长度则是 `num_vision_tokens + 2`，因为要额外考虑前缀后缀两个特殊token
 
 这件事必须在文档和代码里说清楚，否则长度账会再次混乱。
 

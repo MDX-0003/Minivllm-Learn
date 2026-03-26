@@ -132,11 +132,21 @@ class MMModelRunner(ModelRunner):
             t_vis = int(seq.num_vision_tokens)
             t_total = len(seq.token_ids)
 
-            # 构造当前 sequence 的 mask（前 t_vis 个位置为 True）
+            # The sequence already contains:
+            # <vision_start> + image_pad * T_vis + <vision_end> + text_tokens
+            # Only image_pad positions should be replaced by vision embeddings.
             seq_mask = torch.zeros(t_total, dtype=torch.bool, device=device)
-
+            if seq.placeholder_length:
+                seq_mask[:seq.placeholder_length] = torch.tensor(
+                    seq.placeholder_mask,
+                    dtype=torch.bool,
+                    device=device,
+                )
+                tmp_sum = sum(seq.placeholder_mask)
+                print(f"placeholder_length = {seq.placeholder_length}")
+                print(f"num_vision_tokens = {seq.num_vision_tokens}")
+                print(f"sum of mask = {tmp_sum}")
             if t_vis > 0:
-                seq_mask[:t_vis] = True
                 vis = fake_vision_embeds(
                     image_path=seq.image_path,
                     num_vision_tokens=t_vis,
