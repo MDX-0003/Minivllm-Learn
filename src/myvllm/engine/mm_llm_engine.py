@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import sys, os
 import atexit
 import time
 import torch.multiprocessing as mp
@@ -46,7 +46,10 @@ class MMLLMEngine:
             process.start()
 
         self.model_runner = MMModelRunner(config, rank=0, event=self.events)
-        self.tokenizer = AutoTokenizer.from_pretrained(config.get("model_name_or_path", "gpt2"))
+        path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
+        model_name = config.get('model_name_or_path', 'Qwen/Qwen3-0.6B')
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=path)
+        #self.tokenizer = AutoTokenizer.from_pretrained(config.get("model_name_or_path", "gpt2"))
         atexit.register(self.exit)
         self.vis_processor = Processor(config)
 
@@ -85,8 +88,10 @@ class MMLLMEngine:
             self.add_prompt(prompt, sampling_params)
 
         generated_tokens = {}
+        step_num = 0
         while not self.scheduler.is_finished():
             start_t = time.time()
+            step_num = step_num+1
             outputs, num_processed_tokens, is_prefill = self.step()
             end_t = time.time()
             running_time = end_t - start_t + 1e-10
@@ -105,7 +110,7 @@ class MMLLMEngine:
                     "tokens/sec during decoding",
                 )
             generated_tokens.update({seq_id: tokens for seq_id, tokens in outputs})
-
+        print(f"steps happen in llmEngine.generate():{step_num}")
         generated_tokens = [generated_tokens[seq_id] for seq_id in sorted(generated_tokens.keys())]
         output = {
             "text": [self.tokenizer.decode(tokens) for tokens in generated_tokens],

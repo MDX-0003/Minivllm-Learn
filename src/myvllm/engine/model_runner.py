@@ -377,7 +377,10 @@ class ModelRunner:
         # only sample when rank == 0
         token_ids = None
         if self.rank == 0:
-            token_ids = self.sampler(logits, self.prepare_sample(seqs))
+            token_ids = self.sampler(logits, self.prepare_sample(seqs))#得到Tensor
+            token_ids = token_ids.detach().cpu().tolist()
+            #model_runner.run() - 结果在schedule.step里填入postprocess - 里面让结果append到seq.token_ids
+            # token_ids要求元素是python而非tensor
         reset_context()
         return token_ids
 

@@ -80,7 +80,7 @@ class Sequence:
             start_idx = i * self.block_size
             end_idx = start_idx + self.block_size
             return self.token_ids[start_idx : end_idx]
-
+#是seq.token_id唯一的append位置，只在decode阶段被postprocess调用
     def append_token(self, token_id):
         self.token_ids.append(token_id)
         self.last_token = token_id

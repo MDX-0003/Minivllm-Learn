@@ -1,629 +1,579 @@
-# 多模态学习版落地 TodoList（面向当前 `myvllm`）
+# 多模态学习版落地 TodoList（服务于后续自行编码）
 
 ## 文档目标
 
-这份文档用于把当前仓库的多模态目标、已有基础、参考官方 `vllm` 的最小实现路线，整理成一份**可继续施工的 todolist**。
+这份文档不再只是“方向说明”，而是给你后续自己写代码时直接对照的施工单。
 
-它重点回答 4 个问题：
+它重点回答 4 件事：
 
-1. 当前多模态能力已经做到哪里了
-2. 现阶段真正的目标是什么
-3. 参考官方 `vllm` 时，最小应该借哪些框架思想
-4. 接下来每一步应该改什么、怎么验证、完成后得到什么
-
-这不是纯分析笔记，也不是最终实现说明书；它是后续继续落地时可直接执行的路线文档。
+1. 现在这条链路已经做到什么程度
+2. 为什么当前还没有视觉理解能力
+3. 接下来应该按什么顺序改
+4. 每一步要改哪些关键内容、为什么改、做完怎么验收
 
 ---
 
-## 先说当前总目标
+## 当前现状：你已经打通的是“多模态工程链路”，不是“视觉理解能力”
 
-当前目标不是一步做成完整的官方 `Qwen3-VL` 兼容推理器，而是做一个：
+当前仓库已经具备这些能力：
 
-> **尽量少改现有 `myvllm` 架构、但在边界设计上向官方 `vllm` 靠拢的学习版多模态实现。**
+- `ImageSequence` 能把视觉前缀长度计入总长度
+- `MMModelRunner` 能在 prefill 阶段携带视觉前缀
+- `MMQwen3ForCausalLM` 能把视觉 embedding 替换进输入 embedding
+- decode 仍然沿用 text-only 路径
+- 增大 `max_model_length` 后，序列不会因为长度上限过早终止
 
-更具体地说，当前目标可以拆成 3 层：
+这说明你已经证明了两件很重要的事：
 
-### 目标 1：保住现有主链
+1. 视觉信息可以只进入 prefill
+2. KV-cache / slot mapping / decode 主链可以在多模态场景下继续工作
 
-必须继续满足：
+但当前还没有视觉理解能力，原因也很明确：
 
-- text-only 路径尽量不受影响
-- decode 快路径尽量不受影响
-- 多模态影响优先限制在 prefill
+1. 当前模型是 `Qwen/Qwen3-0.6B` 文本模型，不是 VL 模型
+2. 当前视觉输入是 `fake_vision_embeds(...)` 随机向量，不是训练对齐过的视觉特征
+3. 当前 placeholder 协议仍是内部假协议，不是真正的 Qwen-VL 输入协议
+4. prompt 模板仍是文本 chat template，不是 vision chat template
 
-### 目标 2：把当前 Milestone 1 从“临时跑通”升级成“结构更稳”
-
-当前 Milestone 1 已经证明：
-
-- 视觉信息可以只进 prefill
-- 只要 KV-cache 长度账对齐，decode 可以不动
-
-但当前方案仍然偏“runner 手工拼接 embeddings”，还不够像一个稳定的框架协议。
-
-### 目标 3：向官方 `vllm` 学“边界”，而不是学“全家桶复杂度”
-
-最值得借的不是完整 registry，而是这三层边界：
-
-- `processor`：负责把图片和 prompt 变成模型需要的结构
-- `model`：负责把视觉 embedding 合并到文本 embedding
-- `runner`：继续只负责 prefill/decode/KV-cache 账本
+所以现在出现“能输出一些 token，但内容是一串数字”的现象，不是矛盾，而是当前阶段的正常退化表现。
 
 ---
 
-## 当前已经完成了什么
+## 为什么新的实施顺序必须调整
 
-结合已有代码与分析，可认为当前已经完成：
+你当前的目标已经不是“先跑通”，而是“接入视觉理解能力”。
 
-### 已完成 1：多模态 prefill 已打通
+这意味着后续顺序不能再围绕：
 
-当前已有：
+- 增加更多 fake 视觉 token
+- 调更大的 `max_model_length`
+- 在 runner 里继续堆临时逻辑
 
-- `ImageSequence`
-- `MMModelRunner`
-- `MMLLMEngine`
-- `MMQwen3ForCausalLM`
-- `fake_vision_embeds`
+而要改成下面这个顺序：
 
-已经能做到：
+1. 先固定多模态输入协议
+2. 再接入真实视觉特征
+3. 再让模型真正消费这些视觉特征
+4. 最后再做和具体 VL 权重更紧的对齐
 
-- 序列总长度按 $T_{vis}+T_{text}$ 处理
-- `slot_mapping` / `cu_seqlens` 按总长度构造
-- prefill 阶段把图片前缀和文本 embedding 拼起来喂给模型
-- decode 维持原 text-only 路径
+原因很直接：
 
-### 已完成 2：关键工程结论已经验证出来
-
-已经验证出的正确方向：
-
-1. 图片信息可以只写进 prefill
-2. decode 不需要重新处理图片
-3. 多模态最脆弱的部分不是“模型答得对不对”，而是：
-   - token 数对不对
-   - `slot_mapping` 长度对不对
-   - KV-cache 写入账是否与模型实际处理长度一致
+- 输入协议没定，后续每加一层都会继续漂
+- 视觉特征不真实，模型永远只是在处理分布外噪声
+- 模型和 tokenizer / special token 协议不对齐，哪怕能 decode，也很难得到可解释输出
 
 ---
 
-## 当前主要问题 / 为什么还要继续改
+## 推荐施工顺序总览
 
-当前实现虽然能跑通，但还有几个明显问题。
+后续建议按下面 6 步推进，不要跳步。
 
-### 问题 1：视觉 token 不在 token 序列里
+1. 固定多模态输入协议与边界
+2. 把 placeholder 机制改成“接近真实 VL 协议”的版本
+3. 引入真实视觉塔和 projector，替换 fake vision
+4. 规范化 model 侧 merge 接口
+5. 让 engine / processor / prompt 形成统一入口
+6. 最后再考虑对齐具体 VL checkpoint 或权重映射
 
-当前做法里：
-
-- `token_ids` 主要还是文本 token
-- 图片前缀只存在于 `inputs_embeds = concat([vision, text])`,见MMModelRunner.prepare_prefill
-
-这意味着：
-
-- 长度账有一部分在 `ImageSequence.num_tokens`
-- 另一部分在 runner 临时拼 embeddings
-- 还要依赖一个“全零 placeholder tensor”去补齐长度契约
-
-这说明当前“总长度的真相来源”还没有完全统一。
-
-### 问题 2：模型层没有明确占位协议
-
-当前模型只是在 prefill 时接受 `inputs_embeds`，但并不知道：
-
-- 哪些位置本来是视觉位
-- 哪些位置是文本位
-- 多模态替换是怎么发生的
-
-这会使后续接真实视觉塔时，runner 和 model 的边界仍然容易混。
-
-### 问题 3：图片处理还没有从 runner 中剥离
-
-目前图片相关逻辑主要散落在：
-
-- `MMModelRunner.prepare_prefill()`
-- `fake_vision_embeds(...)`
-
-这对学习阶段可以接受，但如果以后加：
-
-- placeholder token
-- 真正的 image preprocess
-- 真实 vision encoder
-- projector
-
-继续把逻辑堆在 runner 里会越来越乱。
+下面每一步都写成“目标 / 关键改动 / 为什么改 / 验收目标”的形式。
 
 ---
 
-## 参考官方 `vllm` 时，最小要借什么
-
-对当前仓库，最小应该借的不是完整 `MultiModalRegistry`，而是下面这套最小框架。
-
-### 1. placeholder token 机制
-
-官方 `vllm` 的核心启发是：
-
-- 视觉长度应该体现在 token 序列本身里
-- prompt 里先预留 placeholder 位置
-- 后面再把这些位置的 embedding 替换成视觉 embedding
-
-这比现在的“runner 外拼 concat embeddings”更稳定。
-
-### 2. processor / model / runner 分层
-
-建议明确职责：
-
-- `processor`：决定视觉 token 数、构造 placeholder token ids、准备图片输入
-- `model`：把 placeholder 位替换成视觉 embeddings
-- `runner`：只管总 token 数、prefill/decode、KV-cache
-
-### 3. 先 merge embedding，再复用原 transformer 主体
-
-也就是：
-
-1. 先按正常 `input_ids` 做文本 embedding
-2. 再按 mask 把视觉位替换掉
-3. 再把合并后的 `inputs_embeds` 送进原 transformer
-
-这是最适合当前仓库的“最小像官方”的实现。
-
----
-
-## Todo 总览
-
-建议后续按下面 6 步推进。
-
-1. 固定当前多模态最小契约
-2. 引入图片 placeholder token 协议
-3. 把 embedding merge 从 runner 挪到 model
-4. 新增最小 `processor` 层
-5. 补一轮验证 / 日志 / stop reason
-6. 再考虑替换 fake vision 为 real vision
-
-下面分别展开。
-
----
-
-## TODO 1：固定当前多模态最小契约
+## TODO 1：固定多模态输入协议与当前边界
 
 ### 目标
 
-先把当前 Milestone 1 的约束写死，避免后续边改边漂移。
+先把当前版本明确成一个稳定的 Milestone：
 
-本步完成后，应明确当前学习版多模态的最小 contract：
+- 视觉信息只进入 prefill
+- decode 不重新处理图片
+- 总长度以“实际送入模型的 token 序列长度”为准
+- model 负责 merge embedding
+- runner 只负责调度、长度账、KV-cache 写入账
 
-- 视觉信息只进 prefill
-- decode 保持 text-only
-- 总 token 数一律按 $T_{vis}+T_{text}$ 计算
-- `slot_mapping` 长度必须等于模型真实处理的 token 数
+### 为什么先做这一步
 
-### 参考官方 vLLM 的哪一点
+如果这一步不先固定，后面你在 `processor`、`runner`、`model` 三层都会重复发明协议，导致：
 
-参考的是官方“先把长度和占位协议说清楚”的做法，而不是具体代码结构。
+- 同一个信息在多个类里重复保存
+- 长度账的“真相来源”不唯一
+- 真实视觉塔接进来后很难判断错误是在协议层还是语义层
 
-### 建议改动
+### 关键改动
 
-优先不是改代码，而是补一份短文档或把现有文档里的 contract 提炼清楚，明确：
+这一步主要更新文档和注释，不以大改代码为主。
 
-- 输入：文本 token + 图片
-- prefill：处理总长度 = $T_{vis}+T_{text}$
-- decode：只处理新增 token
-- 当前版本仍使用 fake vision
-- 当前版本仍不兼容官方 VL 权重
-
-### 相关文件
-
-- `Docs/MileStone-note1.md`
-- `Docs/vLLM_multimodal_analysis_for_myvllm.md`
-- 可新增一个更短的 contract note（可选）
-
-### 验证方式
-
-验收点不是跑分，而是“以后改代码时不会再混淆当前设计边界”。
-
-### 完成后得到什么
-
-得到一个稳定的工程边界，避免后续每一步都重新讨论“decode 要不要看图片”。
-
----
-
-## TODO 2：引入图片 placeholder token 协议
-
-### 目标
-
-把当前“视觉长度只存在于 `num_tokens` 和 `inputs_embeds` 拼接里”的方式，升级成：
-
-- `token_ids` 本身也包含视觉占位位子
-
-这是整个路线里最关键的一步。
-
-### 参考官方 vLLM 的哪一点
-
-直接参考官方：
-
-- prompt/token 序列中预留 placeholder 位置
-- 总长度直接来自 token 序列
-
-### 建议改动
-
-#### 2.1 增加内部专用 placeholder token id
-
-在 config 中增加一个内部约定字段，例如：
-
-- `image_token_id`
-
-它不一定要立刻成为 tokenizer 真正 special token，但要作为框架内部保留占位 id 使用。
-
-#### 2.2 改造 `ImageSequence`
-
-让 `token_ids` 直接变成：
-
-- `[image_token_id] * num_vision_tokens + text_token_ids`
-
-或者保存一份新的：
-
-- `prompt_token_ids_with_placeholders`
-
-推荐优先直接让 `token_ids` 含 placeholder，这样长度账最统一。
-
-#### 2.3 `num_tokens` 由 token 序列自然决定
-
-这一步做完后，理想状态应是：
-
-- `len(seq.token_ids)` 本身就等于 $T_{vis}+T_{text}$
-- 不再需要仅靠 `num_vision_tokens + len(text_token_ids)` 去“补长度”
-
-### 相关文件
+建议明确以下几个契约，并在相关文件里补简短注释：
 
 - `src/myvllm/engine/image_sequence.py`
-- `src/myvllm/engine/mm_llm_engine.py`
-- 可能补一点 `main.py` / config wiring
-
-### 验证方式
-
-1. 打印一条多模态序列的：
-   - `len(seq.token_ids)`
-   - `seq.num_tokens`
-   - `seq.num_vision_tokens`
-2. 确认三者关系清楚
-3. 确认 `slot_mapping` 长度直接由 token 序列长度驱动
-
-### 完成后得到什么
-
-- 总长度的真相来源统一了
-- 后面可以逐步删掉当前的“全零长度占位 tensor”式兼容技巧
-
----
-
-## TODO 3：把 embedding merge 从 runner 挪到 model
-
-### 目标
-
-把当前：
-
-- runner 手动 `concat([vision_embeds, text_embeds])`
-
-升级成：
-
-- model 先 embed 文本
-- 再在 placeholder 位置替换成视觉 embeddings
-
-### 参考官方 vLLM 的哪一点
-
-直接参考：
-
-- `embed_input_ids(...)`
-- `_merge_multimodal_embeddings(...)`
-
-也就是“token 序列完整保留，embedding 层局部替换”。
-
-### 建议改动
-
-#### 3.1 为 `MMQwen3ForCausalLM` 新增 embedding merge 入口
-
-建议增加：
-
-- `embed_multimodal(...)`
-- `embed_input_ids(...)`
-- `forward(..., multimodal_embeddings=None, is_multimodal=None)`
-
-基本逻辑：
-
-1. `inputs_embeds = embed_tokens(input_ids)`
-2. `is_multimodal = (input_ids == image_token_id)`
-3. 用 mask / 索引替换这些位置的 embedding
-4. 将合并后的 embeddings 继续送入原模型
-
-#### 3.2 `MMModelRunner.prepare_prefill()` 不再手工 concat
-
-runner 改为只准备：
-
-- `input_ids`（含 placeholder）
-- `multimodal_embeddings`
-- `is_multimodal`
-
-然后在 prefill forward 调用：
-
-- `self.model(input_ids=..., multimodal_embeddings=..., is_multimodal=...)`
-
-### 相关文件
-
+  - `token_ids` 表示真实送入模型的 prompt token 序列
+  - 其中应包含视觉 placeholder 位
+- `src/myvllm/engine/mm_model_runner.py`
+  - prefill 构造长度账、slot mapping、KV-cache 写入位置
+  - 不负责解释图片语义
 - `src/myvllm/models/mm_qwen3.py`
-- `src/myvllm/models/qwen3.py`（如果需要最小入口改动）
-- `src/myvllm/engine/mm_model_runner.py`
-
-### 验证方式
-
-1. 在 prefill 时打印：
-   - `input_ids.shape[0]`
-   - `multimodal_embeddings.shape[0]`
-   - `is_multimodal.sum()`
-2. 确认：
-
-$$
-\text{is\_multimodal.sum()} = T_{vis}
-$$
-
-3. 确认模型 forward 不再依赖 runner 侧的 `concat([vision, text])`
-
-### 完成后得到什么
-
-- runner 和 model 的职责边界更像官方
-- 后面换真实视觉塔时，runner 几乎不用再碰融合逻辑
-
----
-
-当前已实现：
-┌─────────────────────────────────────────────────────────────────┐
-│  ImageSequence.__init__                                        │
-│    full_token_ids = [0]*num_vision_tokens + text_token_ids     │
-│    self.num_vision_tokens = num_vision_tokens                   │
-│    self.image_path = image_path                                 │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  MMModelRunner.prepare_prefill(seqs)                            │
-│    for each seq:                                                │
-│      t_vis = seq.num_vision_tokens                              │
-│      t_total = len(seq.token_ids)                               │
-│      seq_mask = [True]*t_vis + [False]*(t_total - t_vis)       │
-│      vis = fake_vision_embeds(..., num_vision_tokens=t_vis)    │
-│    is_multimodal = cat([seq_masks])        # (T_total,)        │
-│    multimodal_embeddings = cat(vis_list)  # (T_vis, hidden)    │
-│    self._last_multimodal_embeddings = ...                     │
-│    self._last_is_multimodal = is_multimodal                    │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  MMModelRunner.run_model(input_ids, is_prefill)                 │
-│    input_ids 来自 seq.token_ids，长度 = t_vis + t_text         │
-│    hidden = model(input_ids, vis_embeds, vis_masks)            │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  MMQwen3ForCausalLM.forward(input_ids, vis_embeds, vis_masks)   │
-│    inputs_embeds = embed_tokens(input_ids)  # (T_total, hidden)│
-│    inputs_embeds[vis_masks] = vis_embeds      # 原地替换        │
-│    return model(input_ids=None, inputs_embeds)                 │
-└─────────────────────────────────────────────────────────────────┘
-
-
-
-## TODO 4：新增最小 `processor` 层
-
-### 目标
-
-把“图片如何变成模型输入信息”从 runner 中剥出来，形成一个独立层。
-
-### 参考官方 vLLM 的哪一点
-
-参考的是官方的 `processor` 思想，而不是完整 registry。
-
-### 建议改动
-
-新增目录：
-
-- `src/myvllm/multimodal/`
-
-建议至少新增：
-
-#### `processor.py`
-
-负责：
-
-- 接收 `image_path`
-- 读取图片
-- 决定 `num_vision_tokens`
-- 构造 placeholder token ids
-- 返回多模态输入结构
-
-在 fake vision 阶段，processor 甚至可以先不做复杂 preprocess，只做：
-
-- 图片路径检查
-- placeholder token 构造
-- 返回结构化结果
-
-#### 如果一步不想加太多文件
-
-也可以先只建：
-
+  - 负责把视觉 embedding 写入 placeholder 对应位置
 - `src/myvllm/multimodal/processor.py`
+  - 负责构造多模态输入结构，不负责调度
 
-后续再拆 `vision_encoder.py` / `projector.py`。
+### 验收目标
 
-### 相关文件
+满足下面 3 条即可认为通过：
 
-- 新增 `src/myvllm/multimodal/processor.py`
-- `src/myvllm/engine/mm_llm_engine.py`
-- `src/myvllm/engine/image_sequence.py`
-
-### 验证方式
-
-1. 给定 `image_path` 和文本 prompt
-2. 检查 processor 输出：
-   - placeholder token 数是否正确
-   - token 序列长度是否正确
-   - image 元数据是否正确带到后续流程
-
-### 完成后得到什么
-
-- 图片处理不再散落在 runner 里
-- 后续接真实视觉塔时有明确插槽
+1. 你能用一句话说明每个模块的职责，不再混淆
+2. 你能明确说出“视觉信息在哪一层第一次变成 embedding”
+3. 你能明确说出“decode 为什么不需要重新处理图片”
 
 ---
 
-## TODO 5：补最小验证与 stop reason 日志
+## TODO 2：把 placeholder 机制改成接近真实 VL 协议
 
 ### 目标
 
-把当前“prefill 后直接 finished、却不容易看出原因”的问题补上观测能力。
+把当前“前面塞 `[0] * num_vision_tokens`”的方案，升级成一个明确的、可扩展的视觉占位协议。
 
-### 参考官方 vLLM 的哪一点
+这一步的重点不是“马上完全兼容 Qwen-VL”，而是先停止使用语义上错误的 placeholder。
 
-不是直接抄官方代码，而是学它“每层边界都有明确状态”的工程思路。
+### 为什么这一步优先级最高
 
-### 建议改动
+你现在的 `placeholder_id = 0` 只是一个占坑值，见 `src/myvllm/multimodal/processor.py`。
 
-优先补以下日志：
+这会带来两个问题：
 
-- `num_tokens`
-- `num_prompt_tokens`
-- `num_completion_tokens`
-- `max_model_length`
-- `stop_due_to_eos`
-- `stop_due_to_max_tokens`
-- `stop_due_to_max_length`
+1. 它不是视觉 special token，只是普通词表 token
+2. 你的代码虽然在 prefill 时把这些位置替换成了 `vis_embeds`，但整个输入协议仍然和真实 VL 模型严重脱节
 
-以及多模态 prefill 相关一致性检查：
+如果不先修这个协议，后面接真实 vision encoder 仍然会建立在错误输入格式上。
 
-- `len(input_ids) == slot_mapping.numel()`
-- `is_multimodal.sum() == num_vision_tokens`
-- `multimodal_embeddings.shape[0] == num_vision_tokens`
+### 关键改动
+
+建议把这一阶段拆成 3 个小点。
+
+#### 2.1 引入明确的视觉 special token 配置
+
+在 config 或 processor 层明确这些 token id：
+
+- `vision_start_token_id`
+- `image_pad_token_id`
+- `vision_end_token_id`
+
+如果你暂时还不想真正改 tokenizer 词表，至少也要在代码层保留这些字段，并把 placeholder 逻辑从单个 `0` 改成更明确的结构。
+
+更推荐的做法是直接复用 Qwen tokenizer 已有 special tokens：
+
+- `<|vision_start|>`
+- `<|image_pad|>`
+- `<|vision_end|>`
+
+### 2.2 改造 `Processor.process()`
+
+当前 `Processor.process()` 只返回：
+
+- `placeholder_token_ids=[0] * num_vision_tokens`
+
+建议改成返回：
+
+- `placeholder_token_ids = [vision_start] + [image_pad] * num_vision_tokens + [vision_end]`
+- `num_vision_tokens`
+- `image_meta`
+- 可选：`vision_token_span`
+
+注意这里有一个实现选择：
+
+1. `num_vision_tokens` 只表示纯视觉 patch token 数，不含 start/end
+2. prompt 真实额外长度则是 `num_vision_tokens + 2`
+
+这件事必须在文档和代码里说清楚，否则长度账会再次混乱。
+
+### 2.3 改造 `ImageSequence`
+
+当前 `ImageSequence` 已经把 `placeholder_token_ids + text_token_ids` 合成到 `token_ids` 中，这是对的。
+
+这一步要补的不是大方向，而是把语义写清楚：
+
+- `token_ids` 现在不再只是“文本 + 假占位”
+- 而是“完整 prompt token 序列，其中视觉位也以真实占位 token 出现”
 
 ### 相关文件
 
-- `src/myvllm/engine/scheduler.py`
-- `src/myvllm/engine/mm_model_runner.py`
-- 可能补少量 debug print / assert 到 `main.py`
+- [processor.py](/home/dministrator/Minivllm-Learn/src/myvllm/multimodal/processor.py)
+- [image_sequence.py](/home/dministrator/Minivllm-Learn/src/myvllm/engine/image_sequence.py)
+- [mm_llm_engine.py](/home/dministrator/Minivllm-Learn/src/myvllm/engine/mm_llm_engine.py)
+- [main.py](/home/dministrator/Minivllm-Learn/main.py)
 
-### 验证方式
+### 验收目标
 
-1. 跑一条单图 prompt
-2. 能明确看到 sequence 是因为什么结束
-3. 如果异常，能第一时间定位是：
-   - 长度账错
-   - stop 条件触发
-   - embedding merge 数量不一致
+这一步通过的标准应当是：
 
-### 完成后得到什么
-
-- 后续每改一步都更容易定位问题
-- 不会再只看到“Completion 空”却不知道是哪一步终止了
+1. 打印 `seq.token_ids[:20]` 时，前面不再是一串 `0`
+2. `len(seq.token_ids)` 与 `seq.num_tokens` 一致
+3. 你能明确区分：
+   - 视觉 patch token 数
+   - 真实 prompt 中多出来的视觉占位 token 数
+4. prefill 后 `slot_mapping.numel()` 仍与真实输入长度一致
 
 ---
 
-## TODO 6：将 fake vision 替换为 real vision（后续阶段）
+## TODO 3：引入真实视觉塔和 projector，替换 fake vision
 
 ### 目标
 
-在框架边界稳定后，再把：
+把当前的：
 
-- `fake_vision_embeds`
+- `fake_vision_embeds(image_path, num_vision_tokens, hidden_size, ...)`
 
 替换成：
 
-- 真实视觉特征提取 + projector
+- `vision_encoder(image) -> image_features`
+- `projector(image_features) -> vision_embeds`
 
-### 参考官方 vLLM 的哪一点
+这是“接入视觉理解能力”的第一步实质性改动。
 
-参考的是：
+### 为什么这是当前真正决定语义质量的一步
 
-- 图片走独立 vision tower / projector 路径
-- model 侧统一 merge
+现在输出一串数字，不是因为 decode 没跑通，而是因为你给模型的“视觉 embedding”本质上是随机噪声。
 
-### 建议改动
+只要还在用 [`fake_vision.py`](/home/dministrator/Minivllm-Learn/src/myvllm/utils/fake_vision.py)，模型就不可能学会“图像内容 -> 语言回答”。
 
-后续新增：
+所以这一步的地位高于继续调：
+
+- `max_model_length`
+- `num_vision_tokens`
+- decode 停止条件
+
+### 关键改动
+
+建议新增目录和模块：
 
 - `src/myvllm/multimodal/vision_encoder.py`
 - `src/myvllm/multimodal/projector.py`
 
-第一版优先做“能通”的版本：
+推荐最小实现如下。
 
-- 现成 vision backbone
-- 简单 linear / MLP projector
+#### 3.1 `vision_encoder.py`
 
-先不要追求：
+职责：
 
-- 官方 Qwen3-VL 权重兼容
-- 完整特殊 token 协议
-- MRoPE 对齐
+- 读入图片
+- 做 resize / normalize
+- 送入现成 vision backbone
+- 输出 patch-level 或 sequence-level visual features
+
+你当前阶段不必自己写 ViT。
+
+优先选一个现成 backbone，例如：
+
+- CLIP vision model
+- SigLIP vision model
+
+#### 3.2 `projector.py`
+
+职责：
+
+- 把视觉 backbone 输出维度映射到 LLM hidden size
+
+最小可行版本：
+
+- 一个 `nn.Linear(vision_dim, hidden_size)`
+
+稍稳一点的版本：
+
+- `Linear -> GELU/SiLU -> Linear`
+
+#### 3.3 把 `fake_vision_embeds` 的调用点替换掉
+
+当前调用点在 [`mm_model_runner.py`](/home/dministrator/Minivllm-Learn/src/myvllm/engine/mm_model_runner.py)。
+
+建议替换思路是：
+
+1. 先保留接口形状不变
+2. 只把返回值来源从 fake 改成 real
+
+也就是尽量让 runner 继续只关心：
+
+- `vis_embeds.shape == (T_vis, hidden_size)`
+
+而不关心这些 embedding 是怎么来的。
 
 ### 相关文件
 
-- `src/myvllm/multimodal/vision_encoder.py`
-- `src/myvllm/multimodal/projector.py`
-- `src/myvllm/models/mm_qwen3.py`
-- `src/myvllm/multimodal/processor.py`
+- [mm_model_runner.py](/home/dministrator/Minivllm-Learn/src/myvllm/engine/mm_model_runner.py)
+- 新增 [vision_encoder.py](/home/dministrator/Minivllm-Learn/src/myvllm/multimodal/vision_encoder.py)
+- 新增 [projector.py](/home/dministrator/Minivllm-Learn/src/myvllm/multimodal/projector.py)
+- [processor.py](/home/dministrator/Minivllm-Learn/src/myvllm/multimodal/processor.py)
 
-### 验证方式
+### 验收目标
 
-1. 两张不同图片输入时，视觉 embedding 不同
-2. 模型输入的多模态 embedding 不再是随机占位
-3. 不破坏前面已经稳定的 placeholder + merge 协议
+这一步的验收不要用“回答是否完全正确”来卡死，而要分层验收：
 
-### 完成后得到什么
-
-- 多模态能力从“结构打通”升级到“真正接入图像语义”
-
----
-
-## 推荐实施顺序（最小安全顺序）
-
-建议严格按下面顺序，不要跳步：
-
-1. 先固定 contract
-2. 再让 token 序列里出现 placeholder
-3. 再把 merge 移到 model
-4. 再剥离 processor
-5. 再补日志和验证
-6. 最后才接真实视觉塔
-
-原因很简单：
-
-- placeholder 协议没固定之前，接视觉塔只会继续放大混乱
-- runner / model 边界没理清之前，加 preprocess 也会越堆越乱
+1. 同一张图，多次运行得到的 `vision_embeds` 基本一致
+2. 不同图片的 `vision_embeds` 明显不同
+3. `vision_embeds.shape[0]` 与视觉占位位数一致
+4. 模型输出不再稳定退化为大段数字或纯符号
+5. 同一个问题换图后，输出开始发生与图像相关的变化
 
 ---
 
-## 每一步的验收原则
+## TODO 4：规范化 model 侧 merge 接口
 
-后续每一步完成后，都至少检查下面 3 件事。
+### 目标
+
+把“模型如何吃掉视觉 embedding”这件事固定成长期接口，而不是继续在 runner 里堆逻辑。
+
+### 为什么这一步放在真实视觉塔之后
+
+你的 `mm_qwen3.py` 现在已经在做基础 merge 了，所以这一步不是从 0 到 1。
+
+但在接入真实 vision encoder 之后，你需要一个更稳定、更清晰的接口，不然以后：
+
+- 视觉 token 数变化
+- start/end token 引入
+- 多图输入
+
+都会让现有接口逐渐变乱。
+
+### 关键改动
+
+建议把 [`mm_qwen3.py`](/home/dministrator/Minivllm-Learn/src/myvllm/models/mm_qwen3.py) 整理成明确的两层接口：
+
+1. `embed_input_ids(input_ids, multimodal_embeddings=None, is_multimodal=None)`
+2. `forward(input_ids, multimodal_embeddings=None, is_multimodal=None)`
+
+建议逻辑：
+
+1. 先做 `inputs_embeds = embed_tokens(input_ids)`
+2. 再用 `is_multimodal` 把视觉位替换成 `multimodal_embeddings`
+3. 替换完成后把 `inputs_embeds` 交给原模型
+
+如果你保留 `vis_embeds` / `vis_masks` 命名，也可以，但建议尽量朝：
+
+- `multimodal_embeddings`
+- `is_multimodal`
+
+这种更通用的名字统一。
+
+### 额外建议
+
+如果你在 TODO 2 引入了：
+
+- `vision_start`
+- `image_pad`
+- `vision_end`
+
+那么这里要明确到底哪些位置参与替换。
+
+推荐规则：
+
+- 只替换中间的 `image_pad` 位置
+- `vision_start` / `vision_end` 保留文本 embedding 或单独处理
+
+不要把这个规则写在 runner 里，应该写在 model merge 逻辑或 processor 返回结构里。
+
+### 相关文件
+
+- [mm_qwen3.py](/home/dministrator/Minivllm-Learn/src/myvllm/models/mm_qwen3.py)
+- 如有需要，少量改动 [qwen3.py](/home/dministrator/Minivllm-Learn/src/myvllm/models/qwen3.py)
+- [mm_model_runner.py](/home/dministrator/Minivllm-Learn/src/myvllm/engine/mm_model_runner.py)
+
+### 验收目标
+
+1. runner 不再需要知道视觉 merge 的细节
+2. `is_multimodal.sum()` 与 `multimodal_embeddings.shape[0]` 始终一致
+3. 你可以单独测试 model merge，而不需要把整个 engine 都跑起来
+
+---
+
+## TODO 5：统一 engine / processor / prompt 入口
+
+### 目标
+
+让“图片 + prompt -> 最终模型输入”的构造过程集中到 `processor` 和 engine 入口，而不是继续零散分布。
+
+### 为什么这一步必须做
+
+你现在虽然已经有 `Processor`，但它还很薄，主要只是返回：
+
+- placeholder token ids
+- image path
+
+如果后面继续加：
+
+- 图片预处理
+- 多张图
+- 不同视觉 token 数
+- 不同 prompt 模式
+
+没有统一入口会很快失控。
+
+### 关键改动
+
+#### 5.1 扩充 `MultimodalInput`
+
+建议在 [`processor.py`](/home/dministrator/Minivllm-Learn/src/myvllm/multimodal/processor.py) 的 `MultimodalInput` 中加入更明确字段，例如：
+
+- `placeholder_token_ids`
+- `num_vision_tokens`
+- `vision_placeholder_mask` 或 `vision_token_spans`
+- `pixel_values` 或预处理后的图像张量
+- `image_meta`
+
+#### 5.2 让 `MMLLMEngine.add_prompt()` 只做组装，不做推断
+
+当前 `MMLLMEngine.add_prompt()` 里还会自己从 config 拿 `num_vision_tokens`。
+
+建议改成：
+
+1. `processor` 决定视觉相关输入
+2. engine 只负责把 text tokens 和 processor 结果拼成 `ImageSequence`
+
+#### 5.3 明确 prompt 入口协议
+
+后面如果你打算向真实 VL checkpoint 靠拢，就不要一直沿用纯文本：
+
+- `<|im_start|>user ...`
+
+你至少要在文档里固定：
+
+- 什么时候由 prompt 文本显式包含视觉标记
+- 什么时候由 processor 自动注入视觉 token
+
+学习版最简单的策略是：
+
+- 文本 prompt 保持干净
+- 视觉 special token 由 processor 注入到 token 序列，而不是让用户手写
+
+### 相关文件
+
+- [processor.py](/home/dministrator/Minivllm-Learn/src/myvllm/multimodal/processor.py)
+- [mm_llm_engine.py](/home/dministrator/Minivllm-Learn/src/myvllm/engine/mm_llm_engine.py)
+- [main.py](/home/dministrator/Minivllm-Learn/main.py)
+
+### 验收目标
+
+1. engine 不再自己决定视觉 token 细节
+2. `processor` 输出的数据结构足够支撑后续真实视觉塔
+3. 你能从单个 `MultimodalInput` 看清最终 prompt 的多模态组成
+
+---
+
+## TODO 6：最后再对齐具体 VL checkpoint 或权重映射
+
+### 目标
+
+在前面协议、视觉特征、merge 接口都稳定后，再去考虑：
+
+- 是否换成真正的 VL checkpoint
+- 是否对齐 Qwen-VL 的 special token / prompt 规范
+- 是否支持官方风格的权重装载
+
+### 为什么这一步必须最后做
+
+如果前面的地基不稳，你现在直接上官方 VL 权重，只会让排错维度爆炸：
+
+- 是权重没映射对？
+- 是视觉塔维度不对？
+- 是 placeholder 位置不对？
+- 是 tokenizer special token 协议不对？
+
+所以这一步必须建立在前 5 步已经清楚的前提下。
+
+### 关键改动
+
+这一阶段可能涉及：
+
+- 更新 `model_name_or_path`
+- 对齐真实 VL tokenizer / processor / config
+- 扩展 `loader.py` 的权重映射
+- 对齐 vision tower、projector、LLM hidden size
+
+如果你要兼容现成 VL 权重，这里才是最可能需要较大改动的地方。
+
+### 相关文件
+
+- [main.py](/home/dministrator/Minivllm-Learn/main.py)
+- [loader.py](/home/dministrator/Minivllm-Learn/src/myvllm/utils/loader.py)
+- [mm_qwen3.py](/home/dministrator/Minivllm-Learn/src/myvllm/models/mm_qwen3.py)
+- `multimodal/` 下新增的真实视觉模块
+
+### 验收目标
+
+这一步通过的标准应当更严格：
+
+1. 同一问句对不同图片能给出可解释差异
+2. 简单图像问题开始出现基本正确答案
+3. 输出不再长期退化成数字串、标点串或空串
+4. text-only 路径仍可正常工作
+
+---
+
+## 每一步都要检查的通用验收项
+
+无论你做到哪一步，每次改完至少检查下面 5 项。
 
 ### 1. 长度账是否统一
 
-必须始终满足：
+始终要满足：
 
-$$
-\text{模型真实处理 token 数} = \text{slot\_mapping 长度} = \text{KV-cache 实际写入 token 数}
-$$
+`模型真实处理 token 数 == slot_mapping 长度 == KV-cache 实际写入 token 数`
 
-### 2. decode 是否仍然保持原路径
+### 2. decode 是否保持独立
 
 必须确认：
 
 - decode 仍然只处理新增 token
-- decode 不重新接图片
-- decode CUDA graph 路径不被新的多模态逻辑污染
+- decode 不重新看图片
+- decode 路径没有被多模态逻辑污染
 
-### 3. text-only 是否继续可用
+### 3. text-only 是否仍可运行
 
 必须确认：
 
-- 不带图片时，旧 text-only 行为不应被新逻辑破坏
+- 不传图片时，旧链路还能正常生成
+
+### 4. multimodal merge 数量是否一致
+
+至少检查：
+
+- `is_multimodal.sum()`
+- `multimodal_embeddings.shape[0]`
+- 真实视觉占位位数
+
+这三者要一致。
+
+### 5. 结束原因是否可见
+
+建议始终保留 stop reason 观测：
+
+- `stop_due_to_eos`
+- `stop_due_to_max_tokens`
+- `stop_due_to_max_length`
+
+否则你会再次遇到“结果不对，但不知道是逻辑错还是提前停了”。
 
 ---
 
-## 一句话版本总结
+## 当前最推荐的最近三步
 
-后续路线不要再继续强化“runner 临时拼 `inputs_embeds`”这条路，而应该尽快转向：
+如果你现在就要继续写代码，我建议你先做下面三步，不要分散：
 
-> **让图片先在 token 序列里占位，再在模型 embedding 层做替换；runner 只继续负责 token 数、prefill/decode 和 KV-cache 账本。**
+1. 先把 `placeholder_id = 0` 升级成明确的视觉 special token 协议
+2. 再新增 `vision_encoder.py` 和 `projector.py`，把 fake vision 替换掉
+3. 最后整理 `mm_qwen3.py` 的 merge 接口，把视觉替换规则固定下来
 
-这就是当前仓库参考官方 `vllm` 时，最小、最值得、也最可落地的实现路线。
+这三步做完之前，不建议再花很多时间调：
+
+- `max_model_length`
+- `num_vision_tokens`
+- decode 采样细节
+
+因为这些都不会从根本上解决“模型看不懂图像”的问题。
+
+---
+
+## 一句话总结
+
+你下一阶段的主线不应该再是“如何让 fake vision 输出更长”，而应该变成：
+
+> 先把视觉占位协议做正确，再把真实视觉特征接进来，再让模型以稳定接口消费这些特征。
+
+只有这条路线，才是在你当前代码基础上真正朝“视觉理解能力”前进。
