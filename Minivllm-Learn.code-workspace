@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../fastVGGT/FastVGGT"
+		}
+	],
+	"settings": {}
+}

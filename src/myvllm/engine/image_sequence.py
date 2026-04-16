@@ -4,6 +4,7 @@ from myvllm.engine.sequence import Sequence
 from myvllm.sampling_parameters import SamplingParams
 
 # llm_engine.add_prompt + model_runner.make_warmup_sequences
+# when init ImgSeq , placeholder means special vis token that will replace in prefill
 class ImageSequence(Sequence):
     def __init__(
         self,
@@ -23,11 +24,17 @@ class ImageSequence(Sequence):
             raise ValueError("placeholder_mask must align with placeholder_token_ids")
         full_token_ids = placeholder_token_ids + text_token_ids
         super().__init__(token_ids=full_token_ids, sampling_params=sampling_params)
+        # father`s member [token_ids] now means vis token + text token 
+        # prefill will allocate slot for vis token
 
         self.image_path = image_path
+
+        # placeholder_length == num_vision_tokens + 2
+        
         self.num_vision_tokens = int(num_vision_tokens) if num_vision_tokens else 0
         self.placeholder_length = len(placeholder_token_ids)
-        self.placeholder_mask = list(placeholder_mask)
+
+        self.placeholder_mask = list(placeholder_mask)#which place should be replace by vis tokens
 
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = self.num_tokens

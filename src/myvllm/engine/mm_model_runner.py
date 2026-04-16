@@ -4,9 +4,10 @@ import torch
 
 from myvllm.engine.model_runner import ModelRunner
 from myvllm.engine.image_sequence import ImageSequence
+from myvllm.multimodal.projector import VisionProjector
+from myvllm.multimodal.vision_encoder import VisionEncoder
 from myvllm.models.mm_qwen3 import MMQwen3ForCausalLM
 from myvllm.utils import set_context
-from myvllm.utils.fake_vision import fake_vision_embeds
 
 
 class MMModelRunner(ModelRunner):
@@ -21,7 +22,34 @@ class MMModelRunner(ModelRunner):
     def __init__(self, config: dict, rank: int, event):
         self._last_multimodal_embeddings: torch.Tensor | None = None
         self._last_is_multimodal: torch.Tensor | None = None
+
+        
+        
+        vision_dim = int(config.get("vision_dim", 512))
+        self.vision_encoder = VisionEncoder(
+            image_size=int(config.get("vision_image_size", 224)),
+            patch_size=int(config.get("vision_patch_size", 14)),
+            vision_dim=vision_dim,
+            seed=int(config.get("vision_seed", 0)),
+        )
+        self.vision_projector = VisionProjector(
+            vision_dim=vision_dim,
+            hidden_size=int(config["hidden_size"]),
+            seed=int(config.get("vision_projector_seed", 1)),
+        )
+        self._vision_modules_device: torch.device | None = None
         super().__init__(config=config, rank=rank, event=event)
+    
+    # move vision module to device + eval
+    def _ensure_vision_modules_on(self, device: torch.device, dtype: torch.dtype) -> None:
+        if self._vision_modules_device != device:
+            self.vision_encoder = self.vision_encoder.to(device=device, dtype=torch.float32)
+            self.vision_projector = self.vision_projector.to(device=device, dtype=torch.float32)
+            self._vision_modules_device = device
+        self.vision_projector = self.vision_projector.to(dtype=torch.float32)
+        self.vision_encoder = self.vision_encoder.to(dtype=torch.float32)
+        self.vision_encoder.eval()
+        self.vision_projector.eval()
 
     def build_model(self):
         return MMQwen3ForCausalLM(
@@ -123,7 +151,7 @@ class MMModelRunner(ModelRunner):
         # Collect multimodal embeddings and masks.
         device = input_ids_t.device
         dtype = self.model.model.embed_tokens.weight.dtype
-        hidden = self.config['hidden_size']
+        self._ensure_vision_modules_on(device, dtype)
 
         vision_embeds_list = []
         seq_masks = []
@@ -147,11 +175,10 @@ class MMModelRunner(ModelRunner):
                 print(f"num_vision_tokens = {seq.num_vision_tokens}")
                 print(f"sum of mask = {tmp_sum}")
             if t_vis > 0:
-                vis = fake_vision_embeds(
-                    image_path=seq.image_path,
+                image_features = self.vision_encoder.encode_image(seq.image_path)
+                vis = self.vision_projector(
+                    image_features,
                     num_vision_tokens=t_vis,
-                    hidden_size=hidden,
-                    device=device,
                     dtype=dtype,
                 )
                 vision_embeds_list.append(vis)

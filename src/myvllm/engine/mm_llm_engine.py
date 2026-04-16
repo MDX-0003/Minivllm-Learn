@@ -77,6 +77,7 @@ class MMLLMEngine:
 
     def add_prompt(self, prompt: str, sampling_params: SamplingParams) -> None:
         image_path = self.config.get("image_path")
+        #make [ vis place holder mask ] , store into ImageSequence`s member
         vis_processor_output = self.vis_processor.process(image_path)
         seq = ImageSequence(
             text_token_ids=self.tokenizer.encode(prompt),
