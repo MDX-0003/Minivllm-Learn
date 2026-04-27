@@ -72,7 +72,7 @@ class MMModelRunner(ModelRunner):
 
     def make_warmup_sequences(self, batch_size: int, max_model_length: int) -> list[ImageSequence]:
         return [
-            ImageSequence(text_token_ids=[0] * max_model_length, image_path=None, num_vision_tokens=0)
+            ImageSequence(token_ids=[0] * max_model_length, multimodal=None)
             for _ in range(batch_size)
         ]
 
@@ -160,20 +160,17 @@ class MMModelRunner(ModelRunner):
             t_vis = int(seq.num_vision_tokens)
             t_total = len(seq.token_ids)
 
-            # The sequence already contains:
-            # <vision_start> + image_pad * T_vis + <vision_end> + text_tokens
-            # Only image_pad positions should be replaced by vision embeddings.
-            seq_mask = torch.zeros(t_total, dtype=torch.bool, device=device)
+            # The processor now owns the token-space protocol, so runner only
+            # consumes the already assembled flattened mask. This keeps prefill
+            # code focused on batching/accounting instead of understanding which
+            # special tokens mean "replace me with vision embeddings".
+            seq_mask = torch.tensor(seq.is_multimodal, dtype=torch.bool, device=device)
+            if seq_mask.numel() != t_total:
+                raise ValueError("Sequence multimodal mask length must match token_ids length")
             if seq.placeholder_length:
-                seq_mask[:seq.placeholder_length] = torch.tensor(
-                    seq.placeholder_mask,
-                    dtype=torch.bool,
-                    device=device,
-                )
-                tmp_sum = sum(seq.placeholder_mask)
                 print(f"placeholder_length = {seq.placeholder_length}")
                 print(f"num_vision_tokens = {seq.num_vision_tokens}")
-                print(f"sum of mask = {tmp_sum}")
+                print(f"sum of mask = {int(seq_mask.sum().item())}")
             if t_vis > 0:
                 image_features = self.vision_encoder.encode_image(seq.image_path)
                 vis = self.vision_projector(
@@ -193,6 +190,12 @@ class MMModelRunner(ModelRunner):
         else:
             multimodal_embeddings = None
 
+        if multimodal_embeddings is not None:
+            mm_rows = multimodal_embeddings.shape[0]
+            mask_rows = int(is_multimodal.sum().item())
+            if mm_rows != mask_rows:
+                raise ValueError("Global multimodal mask count must match projected embedding rows")
+
         # 把这些多模态信息存下来，给之后的 run_model 用
         self._last_multimodal_embeddings = multimodal_embeddings
         self._last_is_multimodal = is_multimodal
@@ -205,11 +208,17 @@ class MMModelRunner(ModelRunner):
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, is_prefill: bool) -> torch.Tensor:
         if is_prefill:
+            multimodal_embeddings = self._last_multimodal_embeddings
+            # Warmup and text-only multimodal-engine batches still flow through
+            # this prefill path. In those cases there is no projected vision
+            # embedding tensor to merge, so we must normalize the pair back to
+            # (None, None) before calling the model-side merge contract.
+            is_multimodal = self._last_is_multimodal if multimodal_embeddings is not None else None
             # 传递 input_ids 、多模态特征、input_ids里的多模态mask，让model内部自己去做 多模态的token merge
             hidden_states = self.model(
                 input_ids=input_ids,
-                vis_embeds=self._last_multimodal_embeddings,
-                vis_masks=self._last_is_multimodal,
+                multimodal_embeddings=multimodal_embeddings,
+                is_multimodal=is_multimodal,
             )
             logits = self.model.compute_logits(hidden_states)
             

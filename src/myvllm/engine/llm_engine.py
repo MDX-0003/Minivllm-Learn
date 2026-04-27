@@ -44,6 +44,7 @@ class LLMEngine:
             self.processes.append(process)
             process.start()
         # start the engine only on the master thread with rank = 0
+        # model_runner
         self.model_runner = ModelRunner(config, rank=0, event=self.events)
         self.tokenizer = AutoTokenizer.from_pretrained(config.get("model_name_or_path", "gpt2"))
         atexit.register(self.exit)
@@ -70,6 +71,7 @@ class LLMEngine:
         # run the model,output = [seq,1] 本次step给每个seq生成的1个后续token
         outputs = self.model_runner.call("run", scheduled_sequences, is_prefill)
         # postprocess the outputs,把token_id append到每条seq上，并更新block manager的状态
+        # 第一次prefill+postprocess就会给每条seq生成一次token，不是decode才开始生成
         self.scheduler.postprocess(scheduled_sequences, outputs)
 
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in scheduled_sequences if seq.is_finished]

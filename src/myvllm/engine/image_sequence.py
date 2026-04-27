@@ -1,44 +1,48 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from myvllm.engine.sequence import Sequence
+from myvllm.multimodal.processor import MultimodalPayload
 from myvllm.sampling_parameters import SamplingParams
 
-# llm_engine.add_prompt + model_runner.make_warmup_sequences
-# when init ImgSeq , placeholder means special vis token that will replace in prefill
+
 class ImageSequence(Sequence):
     def __init__(
         self,
-        text_token_ids: list[int],
+        token_ids: list[int],
         sampling_params: SamplingParams = SamplingParams(),
         *,
-        image_path: str | None = None,
-        num_vision_tokens: int = 0,
-        placeholder_token_ids: list[int] | None = None,
-        placeholder_mask: list[bool] | None = None,
+        multimodal: MultimodalPayload | None = None,
     ):
-        if placeholder_token_ids is None:
-            placeholder_token_ids = []
-        if placeholder_mask is None:
-            placeholder_mask = [False] * len(placeholder_token_ids)
-        if len(placeholder_mask) != len(placeholder_token_ids):
-            raise ValueError("placeholder_mask must align with placeholder_token_ids")
-        full_token_ids = placeholder_token_ids + text_token_ids
-        super().__init__(token_ids=full_token_ids, sampling_params=sampling_params)
-        # father`s member [token_ids] now means vis token + text token 
-        # prefill will allocate slot for vis token
+        super().__init__(token_ids=token_ids, sampling_params=sampling_params)
 
-        self.image_path = image_path
-
-        # placeholder_length == num_vision_tokens + 2
-        
-        self.num_vision_tokens = int(num_vision_tokens) if num_vision_tokens else 0
-        self.placeholder_length = len(placeholder_token_ids)
-
-        self.placeholder_mask = list(placeholder_mask)#which place should be replace by vis tokens
-
+        # Store the payload as one structured object so every consumer sees the
+        # same multimodal contract. This avoids scattering related fields across
+        # the sequence object and later having to reconstruct which values
+        # belong together during prefill.
+        self.multimodal = multimodal
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = self.num_tokens
-        
+
+    @property
+    def image_path(self) -> str | None:
+        return self.multimodal.image_path if self.multimodal is not None else None
+
+    @property
+    def num_vision_tokens(self) -> int:
+        return self.multimodal.num_vision_tokens if self.multimodal is not None else 0
+
+    @property
+    def is_multimodal(self) -> list[bool]:
+        if self.multimodal is None:
+            return [False] * len(self.token_ids)
+        return self.multimodal.is_multimodal
+
+    @property
+    def placeholder_length(self) -> int:
+        if self.multimodal is None:
+            return 0
+        return self.multimodal.placeholder_length
+
     def append_token(self, token_id):
         super().append_token(token_id)
 
@@ -49,16 +53,10 @@ class ImageSequence(Sequence):
     def __getstate__(self):
         base = super().__getstate__()
         return (
-            self.image_path,
-            self.num_vision_tokens,
-            self.placeholder_length,
-            self.placeholder_mask,
+            self.multimodal,
             *base,
         )
 
     def __setstate__(self, state):
-        self.image_path = state[0]
-        self.num_vision_tokens = state[1]
-        self.placeholder_length = state[2]
-        self.placeholder_mask = state[3]
-        super().__setstate__(state[4:])
+        self.multimodal = state[0]
+        super().__setstate__(state[1:])

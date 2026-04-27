@@ -9,6 +9,7 @@ dependencies = [
     "torch",
     "xxhash",
     "vllm>=0.15.0",
+    "accelerate>=1.13.0",
 ]
 
 [project.optional-dependencies]

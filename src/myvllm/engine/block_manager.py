@@ -3,7 +3,11 @@ import numpy as np
 from collections import deque
 
 from myvllm.engine.sequence import Sequence
-
+#can_allocate(seq)	空闲块够不够给这条 seq 当前长度分配？	prefill 准入判断
+#allocate(seq)	给 seq 填 block_table，可能更新 num_cached_tokens	从 waiting 拉出来时
+#can_append(seq)	下一步 decode 会不会跨块、需要新块？够不够？	decode 准入判断
+#may_append(seq)	如果跨块了，分配新块；如果当前块刚满，固化 hash	decode 分支里拉入前
+#deallocate(seq)	释放 seq 占用的所有块（ref_count–，归零则回收）	序列结束或被 preempt 时
 class Block:
     def __init__(self, block_id):
         self.block_id = block_id
@@ -59,7 +63,7 @@ class BlockManager:
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
-    # whether we can allocate a block for this sequence
+    # whether we can allocate a block for this sequence , call in prefill
     def can_allocate(self, seq: Sequence) -> bool:
         return len(self.free_block_ids) >= seq.num_blocks
 

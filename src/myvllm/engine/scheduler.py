@@ -33,6 +33,8 @@ class Scheduler:
         # 在completion阶段，current_scheduled_tokens只会随着每个seq被调度而增加1
 
         # try schedule for prefilling from waiting queue if not exceeding limits
+        # if there are many seq , seq`s total len < limit, [one prefill means many seq]
+        # 尽可能从waiting里取seq来做prefill
         while self.waiting and len(scheduled_sequences) < self.max_num_sequences:
             seq = self.waiting[0]
             if self.block_manager.can_allocate(seq) and len(seq) + current_scheduled_tokens <= self.max_num_batched_tokens:
@@ -43,18 +45,23 @@ class Scheduler:
                 scheduled_sequences.append(seq)
                 current_scheduled_tokens += len(seq)
             else:
-                break
+                break#如果kv cache不够 or 这次batch的预算提交token不够，就跳过当前seq的prefill，只decode
         if scheduled_sequences:
             return scheduled_sequences, True
         
+        #如果waiting没seq在等待prefill，才做decode，否则优先prefill
         # try schedule for completion from running queue
         while self.running:
             seq = self.running.popleft()
             # use can_append to check whether still space can we append one more token
+            #如果某条序列的下一步 decode 需要新块，但空闲块不够了
+            # Scheduler 会把 running 队尾的序列”踢出去”
             if not self.block_manager.can_append(seq):
                 if self.running:
+                    # 释放runing 队尾的块，把它放回 waiting 队头（下次 step时优先处理他的prefill）
                     self.preempt(self.running.pop())
                 else:
+                    # 
                     self.preempt(seq)
                     break
             else:
@@ -71,7 +78,7 @@ class Scheduler:
 
         return scheduled_sequences, False
 
-
+    #表示一条running里的seq需要被踢回waiting队首
     def preempt(self, seq: Sequence) -> None:
         self.block_manager.deallocate(seq)
         seq.status = SequenceStatus.WAITING

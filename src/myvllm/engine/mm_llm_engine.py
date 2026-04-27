@@ -51,13 +51,7 @@ class MMLLMEngine:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=path)
         #self.tokenizer = AutoTokenizer.from_pretrained(config.get("model_name_or_path", "gpt2"))
         atexit.register(self.exit)
-        mm_config = dict(config)
-        # Reuse tokenizer-provided special tokens so the placeholder protocol matches
-        # Qwen-style vision delimiters instead of a fake token id like 0.
-        mm_config["vision_start_token_id"] = self.tokenizer.convert_tokens_to_ids("<|vision_start|>")
-        mm_config["image_pad_token_id"] = self.tokenizer.convert_tokens_to_ids("<|image_pad|>")
-        mm_config["vision_end_token_id"] = self.tokenizer.convert_tokens_to_ids("<|vision_end|>")
-        self.vis_processor = Processor(mm_config)
+        self.vis_processor = Processor(dict(config), tokenizer=self.tokenizer)
 
     def exit(self):
         self.model_runner.call("exit")
@@ -77,15 +71,13 @@ class MMLLMEngine:
 
     def add_prompt(self, prompt: str, sampling_params: SamplingParams) -> None:
         image_path = self.config.get("image_path")
-        #make [ vis place holder mask ] , store into ImageSequence`s member
-        vis_processor_output = self.vis_processor.process(image_path)
+        # Let the processor own prompt-side multimodal assembly so the engine no
+        # longer has to know how placeholder tokens and masks are constructed.
+        vis_processor_output = self.vis_processor.process(prompt, image_path=image_path)
         seq = ImageSequence(
-            text_token_ids=self.tokenizer.encode(prompt),
+            token_ids=vis_processor_output.token_ids,
             sampling_params=sampling_params,
-            image_path=vis_processor_output.image_meta["image_path"],
-            num_vision_tokens=vis_processor_output.num_vision_tokens,
-            placeholder_token_ids=vis_processor_output.placeholder_token_ids,
-            placeholder_mask=vis_processor_output.placeholder_mask,
+            multimodal=vis_processor_output.multimodal,
         )
         self.scheduler.add_sequence(seq)
 

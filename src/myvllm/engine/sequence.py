@@ -10,7 +10,9 @@ class SequenceStatus(Enum):
     RUNNING = auto()
     FINISHED = auto()
 
-
+#WAITING ──(schedule: prefill)──> RUNNING ──(postprocess:append+check EOS/max_tokens)──> FINISHED
+#   ↑                                 |
+#   └──(preempt: 显存不够)─────────────┘
 class Sequence:
     block_size = 256 # number of tokens per block
     counter = count()
@@ -26,7 +28,7 @@ class Sequence:
         self.last_token = self.token_ids[-1] if self.token_ids else None
         # num_tokens, num_prompt_tokens
         self.num_tokens = len(self.token_ids)
-        self.num_prompt_tokens = len(self.token_ids)
+        self.num_prompt_tokens = len(self.token_ids)#promot部分的长度，不随decode增大
         # num_cached_tokens = 0
         self.num_cached_tokens = 0
         # block_table

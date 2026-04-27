@@ -64,10 +64,10 @@ def main():
     # both should be set in SamplingParams and help to determine when to stop generation
     sampling_params = SamplingParams(temperature=0.6, max_tokens=256, max_model_length=config['max_model_length'])
     prompts = [
-        #"introduce yourself",# * 15,
+        "introduce yourself",# * 15,
         #"list all prime numbers within 100",# * 15,
         #"give me your opinion on the impact of artificial intelligence on society",# * 15,
-        "describe the image briefly, then answer: what are the key objects?",
+        #"describe the image briefly, then answer: what are the key objects?",
     ] 
     prompts = [
         tokenizer.apply_chat_template(
@@ -75,6 +75,8 @@ def main():
             tokenize=False,
             add_generation_prompt=True,
         )
+        # user input will end with "<|im_start|>assistant" 
+        # so output will end with single "<|im_end|>"
         for prompt in prompts
     ]
     outputs = llm.generate(prompts, sampling_params)

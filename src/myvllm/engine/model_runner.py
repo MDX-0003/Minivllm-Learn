@@ -195,12 +195,12 @@ class ModelRunner:
         peak_mem_usage = torch.cuda.memory_stats()['allocated_bytes.all.peak']
         current_mem_usage = torch.cuda.memory_stats()['allocated_bytes.all.current']
         # reserve some room for peak memory usage during model execution
-        #因为跑过warmup，所以peak-cur就是model所需的显存大小
+        #因为跑过warmup，所以peak-cur就是model所需的显存大小，而显卡-这个数，就是kv cache的最大数量
         available_mem = total_free_mem - (peak_mem_usage - current_mem_usage)
         
         # find parameters to compute kv cache size
         #注意head要除以world_size，每张卡只持有一部分的cache
-        num_layers = self.config['num_layers']
+        num_layers = self.config['num_layers']#transformer层数 or attention层数，每层一份kv cache
         num_kv_heads = self.config['num_kv_heads'] // self.world_size
         head_dim = self.config['head_dim'] if 'head_dim' in self.config else self.config['hidden_size'] // self.config['num_heads']
 
@@ -213,7 +213,12 @@ class ModelRunner:
         # allocate max possible kv cache for the model, instead for each sequence
         # this is the key for paged attention: one giant KV cache pool, divided into blocks
         # IMPORTANT: Use zeros() instead of empty() to avoid garbage values
-        allocated_kv_cache = torch.zeros(2, self.config['num_layers'], self.num_available_kv_blocks, self.block_size, num_kv_heads, head_dim, device=f'cuda:{self.rank}')
+        # 6维的cache池
+        allocated_kv_cache = torch.zeros(2, 
+                                         self.config['num_layers'], 
+                                         self.num_available_kv_blocks, 
+                                         self.block_size, num_kv_heads, head_dim, 
+                                         device=f'cuda:{self.rank}')
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, 'k_cache') and hasattr(module, 'v_cache'):
@@ -362,7 +367,7 @@ class ModelRunner:
 
         return logits
 
-
+    #两个prepare_*末尾都会把信息同步到context,各forward都会取用
     # prepare prefill
     # prepare sample
     # run model
